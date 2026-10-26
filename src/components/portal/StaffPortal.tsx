@@ -49,6 +49,7 @@ import { buildQuestionnaireUrl } from '../../lib/navigation/urlRouter'
 import { ReportsView } from './ReportsView'
 import { WhatsAppClickToChatModal } from './WhatsAppClickToChatModal'
 import { classifyCustomerSegments, buildCustomerInsightProfile } from '../../lib/customers/segments'
+import { isSupabaseConfigured } from '../../lib/supabase/client'
 
 interface StaffPortalProps {
   onOpenCustomerQuestionnaire?: (tokenHash: string) => void
