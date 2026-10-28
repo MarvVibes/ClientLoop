@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { store } from '../../lib/services/store'
+import { supabaseService } from '../../lib/supabase/service'
 import {
   Building2,
   CheckCircle2,
@@ -21,17 +22,134 @@ export const PublicQuestionnairePage: React.FC<PublicQuestionnairePageProps> = (
   tokenHash,
   onClose
 }) => {
-  const token = store.findTokenByHash(tokenHash)
+  // 1. Initial synchronous local lookup (fast path for staff preview/testing)
+  const [token, setToken] = useState(() => store.findTokenByHash(tokenHash))
+  const [loading, setLoading] = useState<boolean>(!token)
+  const [fetchError, setFetchError] = useState<string | null>(null)
 
-  // If token is missing
+  const business = token ? store.getBusinessById(token.business_id) : undefined
+  const customer = token ? store.findCustomerById(token.business_id, token.customer_id) : undefined
+  const visits = token ? store.getVisitsByBusiness(token.business_id) : []
+  const currentVisit = token ? visits.find(v => v.id === token.visit_id) : undefined
+
+  // State for the 3 Fields
+  const [customerName, setCustomerName] = useState<string>(customer?.name || '')
+  const [firstVisitAnswer, setFirstVisitAnswer] = useState<boolean | null>(null)
+  const [discoverySource, setDiscoverySource] = useState<string>('')
+  const [otherClarification, setOtherClarification] = useState<string>('')
+
+  // Submission and Review states
+  const [submitted, setSubmitted] = useState<boolean>(false)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [reviewClicked, setReviewClicked] = useState<boolean>(false)
+  const [redirectCountdown, setRedirectCountdown] = useState<number | null>(null)
+
+  // Dynamic remote fetch when token is not found in memory (e.g. mobile customer via WhatsApp)
+  useEffect(() => {
+    if (token) return
+
+    let isMounted = true
+    setLoading(true)
+    setFetchError(null)
+
+    supabaseService.fetchPublicQuestionnaire(tokenHash).then(ctx => {
+      if (!isMounted) return
+      setLoading(false)
+      if (ctx && ctx.valid) {
+        store.hydrateTokenContext({
+          tokenId: ctx.token_id,
+          businessId: ctx.business_id,
+          businessName: ctx.business_name,
+          tokenHash,
+          expiresAt: ctx.expires_at,
+          googleReviewUrl: ctx.google_review_url,
+          services: ctx.services,
+          discoverySourceOptions: ctx.discovery_source_options,
+          customerFirstName: ctx.customer_first_name,
+          visitService: ctx.visit_service
+        })
+        const found = store.findTokenByHash(tokenHash)
+        setToken(found)
+        if (ctx.customer_first_name && !customerName) {
+          setCustomerName(ctx.customer_first_name)
+        }
+      } else {
+        setFetchError(ctx?.error || 'INVALID_TOKEN')
+      }
+    }).catch(() => {
+      if (!isMounted) return
+      setLoading(false)
+      setFetchError('NETWORK_ERROR')
+    })
+
+    return () => {
+      isMounted = false
+    }
+  }, [tokenHash, token])
+
+  // Sync document title with business name
+  useEffect(() => {
+    const originalTitle = document.title
+    if (business?.name) {
+      document.title = `${business.name} — Customer Feedback`
+    }
+    return () => {
+      document.title = originalTitle
+    }
+  }, [business?.name])
+
+  // Loading state
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
+        <div className="max-w-md w-full bg-slate-950 p-8 rounded-2xl border border-slate-800 text-center space-y-4">
+          <div className="w-10 h-10 border-3 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto" />
+          <h3 className="text-base font-semibold text-white">Loading your visit feedback…</h3>
+          <p className="text-xs text-slate-400">Connecting securely to questionnaire</p>
+        </div>
+      </div>
+    )
+  }
+
+  // If token is missing / invalid / expired
   if (!token) {
+    const isExpired = fetchError === 'TOKEN_EXPIRED'
+    const isRevoked = fetchError === 'TOKEN_REVOKED'
+    const isConsumed = fetchError === 'ALREADY_SUBMITTED'
+
+    if (isConsumed) {
+      return (
+        <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
+          <div className="max-w-md w-full bg-slate-950 p-6 rounded-2xl border border-slate-800 text-center space-y-3">
+            <CheckCircle2 className="w-10 h-10 text-emerald-400 mx-auto" />
+            <h3 className="text-lg font-bold text-white">Feedback Already Received</h3>
+            <p className="text-xs text-slate-400">
+              Thank you! Your feedback for this visit was already submitted and recorded securely.
+            </p>
+            {onClose && (
+              <button
+                onClick={onClose}
+                className="mt-3 block mx-auto text-xs text-blue-400 hover:underline cursor-pointer"
+              >
+                ← Return
+              </button>
+            )}
+          </div>
+        </div>
+      )
+    }
+
     return (
       <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
         <div className="max-w-md w-full bg-slate-950 p-6 rounded-2xl border border-rose-900 text-center space-y-3">
           <AlertCircle className="w-10 h-10 text-rose-500 mx-auto" />
-          <h3 className="text-lg font-bold text-white">Invalid or Expired Link</h3>
+          <h3 className="text-lg font-bold text-white">
+            {isExpired ? 'Feedback Link Expired' : isRevoked ? 'Link No Longer Active' : 'Invalid or Expired Link'}
+          </h3>
           <p className="text-xs text-slate-400">
-            This questionnaire link is invalid or has expired. Please contact the business for a new link.
+            {isExpired
+              ? 'This single-use feedback link has expired (72-hour window). Please contact the business for a new link.'
+              : 'This questionnaire link is invalid or has expired. Please contact the business for a new link.'}
           </p>
           {onClose && (
             <button
@@ -45,23 +163,6 @@ export const PublicQuestionnairePage: React.FC<PublicQuestionnairePageProps> = (
       </div>
     )
   }
-
-  const business = store.getBusinessById(token.business_id)
-  const customer = store.findCustomerById(token.business_id, token.customer_id)
-  const visits = store.getVisitsByBusiness(token.business_id)
-  const currentVisit = visits.find(v => v.id === token.visit_id)
-
-  // State for the 3 Fields
-  const [customerName, setCustomerName] = useState<string>(customer?.name || '')
-  const [firstVisitAnswer, setFirstVisitAnswer] = useState<boolean | null>(null)
-  const [discoverySource, setDiscoverySource] = useState<string>('')
-  const [otherClarification, setOtherClarification] = useState<string>('')
-
-  // Submission and Review states
-  const [submitted, setSubmitted] = useState<boolean>(false)
-  const [errorMessage, setErrorMessage] = useState<string | null>(null)
-  const [reviewClicked, setReviewClicked] = useState<boolean>(false)
-  const [redirectCountdown, setRedirectCountdown] = useState<number | null>(null)
 
   // Token already consumed check
   if (token.consumed_at && !submitted) {
@@ -158,6 +259,7 @@ export const PublicQuestionnairePage: React.FC<PublicQuestionnairePageProps> = (
   const handleReviewClick = () => {
     setReviewClicked(true)
     store.recordReviewClick(token.business_id, token.customer_id, token.visit_id)
+    supabaseService.recordPublicReviewClick(tokenHash)
   }
 
   return (

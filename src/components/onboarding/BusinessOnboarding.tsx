@@ -7,7 +7,7 @@
 import React, { useState, useEffect } from 'react'
 import { Logo } from '../Logo'
 import { useAuth } from '../../lib/auth/AuthContext'
-import { store, DEFAULT_DISCOVERY_SOURCES } from '../../lib/services/store'
+import { store, DEFAULT_DISCOVERY_SOURCES, generateUuid } from '../../lib/services/store'
 import { supabase, isSupabaseConfigured } from '../../lib/supabase/client'
 import { Business } from '../../lib/types/database'
 import { 
@@ -265,7 +265,7 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
         .replace(/[^a-z0-9-]/g, '') + `-${Math.random().toString(36).substring(2, 6)}`
 
       const newBusiness: Business = {
-        id: `biz_${Math.random().toString(36).substring(2, 10)}`,
+        id: generateUuid(),
         name: businessName.trim(),
         slug,
         category,

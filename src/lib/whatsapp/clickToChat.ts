@@ -37,6 +37,12 @@ export const DEFAULT_WHATSAPP_INVITATION_TEMPLATE =
   'Hello {{customer_name}}, thank you for visiting {{business_name}}!\n\nWe\'d love your feedback - it only takes 60 seconds:\n{{questionnaire_link}}\n\nThank you!'
 
 /**
+ * Direct Google review invitation template for instant ratings
+ */
+export const DIRECT_GOOGLE_REVIEW_TEMPLATE =
+  'Hello {{customer_name}}, thank you for visiting {{business_name}}!\n\nIf you enjoyed your visit today, could you take 30 seconds to leave us a quick review on Google?\n{{google_review_link}}\n\nThank you so much!'
+
+/**
  * Formats a phone number for wa.me link (digits only, no '+' prefix or punctuation)
  */
 export function formatPhoneForWhatsApp(rawPhone: string, defaultCountry = '+1'): {
@@ -72,13 +78,16 @@ export function buildFollowupMessageText(
   template: string,
   customerName: string,
   businessName: string,
-  questionnaireUrl: string
+  questionnaireUrl: string,
+  googleReviewUrl?: string | null
 ): string {
   const greetingName = customerName?.trim() || 'there'
+  const effectiveReviewUrl = googleReviewUrl?.trim() || questionnaireUrl
   return template
     .replace(/\{\{customer_name\}\}/g, greetingName)
     .replace(/\{\{business_name\}\}/g, businessName)
     .replace(/\{\{questionnaire_link\}\}/g, questionnaireUrl)
+    .replace(/\{\{google_review_link\}\}/g, effectiveReviewUrl)
 }
 
 /**
@@ -102,7 +111,8 @@ export function generateWhatsAppClickToChat(params: ClickToChatParams): ClickToC
     template,
     params.customerName || 'there',
     params.businessName,
-    questionnaireUrl
+    questionnaireUrl,
+    biz?.google_review_url
   )
 
   const encodedText = encodeURIComponent(prefilledText)

@@ -299,6 +299,116 @@ class SupabaseService {
       console.warn('Background Supabase business update notice:', err)
     }
   }
+
+  /**
+   * Fetches the public questionnaire context by single-use token hash.
+   * Safe for unauthenticated customer devices (zero PII returned).
+   */
+  async fetchPublicQuestionnaire(tokenHash: string): Promise<PublicQuestionnaireContext | null> {
+    if (!supabase || !isSupabaseConfigured()) return null
+
+    try {
+      // 1. Primary: Use security-definer RPC
+      const { data, error } = await supabase.rpc('get_public_questionnaire_context', {
+        p_token_hash: tokenHash
+      })
+
+      if (!error && data && typeof data === 'object') {
+        const res = data as PublicQuestionnaireContext
+        if (res.valid) return res
+        if (res.error) return { valid: false, error: res.error } as PublicQuestionnaireContext
+      }
+
+      // 2. Direct fallback (if table readable or RLS configured)
+      const { data: tokData, error: tokErr } = await supabase
+        .from('questionnaire_tokens')
+        .select('*')
+        .eq('token_hash', tokenHash)
+        .maybeSingle()
+
+      if (tokErr || !tokData) return null
+
+      if (tokData.revoked_at) return { valid: false, error: 'TOKEN_REVOKED' } as unknown as PublicQuestionnaireContext
+      if (tokData.consumed_at) return { valid: false, error: 'ALREADY_SUBMITTED' } as unknown as PublicQuestionnaireContext
+      if (new Date(tokData.expires_at) < new Date()) return { valid: false, error: 'TOKEN_EXPIRED' } as unknown as PublicQuestionnaireContext
+
+      const { data: bizData } = await supabase
+        .from('businesses')
+        .select('*')
+        .eq('id', tokData.business_id)
+        .maybeSingle()
+
+      let firstName = ''
+      if (tokData.customer_id) {
+        const { data: custData } = await supabase
+          .from('customers')
+          .select('name')
+          .eq('id', tokData.customer_id)
+          .maybeSingle()
+        if (custData?.name) {
+          firstName = custData.name.trim().split(' ')[0]
+        }
+      }
+
+      let visitService = 'General Service'
+      if (tokData.visit_id) {
+        const { data: visitData } = await supabase
+          .from('visits')
+          .select('service')
+          .eq('id', tokData.visit_id)
+          .maybeSingle()
+        if (visitData?.service) {
+          visitService = visitData.service
+        }
+      }
+
+      return {
+        valid: true,
+        token_id: tokData.id,
+        business_id: tokData.business_id,
+        business_name: bizData?.name || 'Customer Feedback',
+        business_category: bizData?.category || 'Service Business',
+        business_timezone: bizData?.timezone || 'Africa/Lagos',
+        google_review_url: bizData?.google_review_url || null,
+        services: bizData?.services || [],
+        discovery_source_options: bizData?.discovery_source_options || [],
+        customer_first_name: firstName,
+        visit_service: visitService,
+        expires_at: tokData.expires_at
+      }
+    } catch (err) {
+      console.warn('Error fetching public questionnaire context:', err)
+      return null
+    }
+  }
+
+  /**
+   * Records outbound public Google Review link click telemetry
+   */
+  async recordPublicReviewClick(tokenHash: string): Promise<void> {
+    if (!supabase || !isSupabaseConfigured()) return
+    try {
+      await supabase.rpc('record_public_review_click', { p_token_hash: tokenHash })
+    } catch {
+      // Non-blocking telemetry notice
+    }
+  }
+}
+
+export interface PublicQuestionnaireContext {
+  valid: boolean
+  token_id: string
+  business_id: string
+  business_name: string
+  business_category: string
+  business_timezone: string
+  google_review_url: string | null
+  services: Array<{ id: string; name: string; default_price?: number; default_duration_min?: number }>
+  discovery_source_options: string[]
+  customer_first_name: string
+  visit_service: string
+  expires_at: string
+  error?: string
 }
 
 export const supabaseService = new SupabaseService()

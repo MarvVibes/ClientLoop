@@ -14,14 +14,17 @@ import {
   Smartphone,
   Laptop,
   ShieldCheck,
-  AlertCircle
+  AlertCircle,
+  Star,
+  Sparkles
 } from 'lucide-react'
 import { Business, Customer, Visit, QuestionnaireToken } from '../../lib/types/database'
 import { store } from '../../lib/services/store'
 import {
   buildFollowupMessageText,
   formatPhoneForWhatsApp,
-  DEFAULT_WHATSAPP_INVITATION_TEMPLATE
+  DEFAULT_WHATSAPP_INVITATION_TEMPLATE,
+  DIRECT_GOOGLE_REVIEW_TEMPLATE
 } from '../../lib/whatsapp/clickToChat'
 import { buildQuestionnaireUrl } from '../../lib/navigation/urlRouter'
 
@@ -42,7 +45,7 @@ export const WhatsAppClickToChatModal: React.FC<WhatsAppClickToChatModalProps> =
   visit,
   onSuccess
 }) => {
-  const [messageTemplate, setMessageTemplate] = useState<string>(DEFAULT_WHATSAPP_INVITATION_TEMPLATE)
+  const [templateType, setTemplateType] = useState<'questionnaire' | 'direct_review'>('questionnaire')
   const [copiedLink, setCopiedLink] = useState(false)
   const [copiedText, setCopiedText] = useState(false)
   const [dispatchStatus, setDispatchStatus] = useState<string | null>(null)
@@ -69,11 +72,16 @@ export const WhatsAppClickToChatModal: React.FC<WhatsAppClickToChatModalProps> =
 
   // Build URLs only when phone is valid
   const questionnaireUrl = buildQuestionnaireUrl(token.token_hash)
+  const activeTemplate = templateType === 'direct_review'
+    ? DIRECT_GOOGLE_REVIEW_TEMPLATE
+    : DEFAULT_WHATSAPP_INVITATION_TEMPLATE
+
   const prefilledText = buildFollowupMessageText(
-    messageTemplate,
+    activeTemplate,
     customer.name || 'there',
     business.name,
-    questionnaireUrl
+    questionnaireUrl,
+    business.google_review_url
   )
   const encodedText = encodeURIComponent(prefilledText)
 
@@ -192,6 +200,52 @@ export const WhatsAppClickToChatModal: React.FC<WhatsAppClickToChatModalProps> =
               </span>
             </div>
           </div>
+
+          {/* Message Type Selector */}
+          {!phoneError && (
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-slate-900 block">
+                Follow-up Link Option
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setTemplateType('questionnaire')}
+                  className={`p-3 rounded-2xl border text-left transition-all cursor-pointer ${
+                    templateType === 'questionnaire'
+                      ? 'bg-blue-50/80 border-blue-500 text-blue-950 shadow-xs ring-1 ring-blue-500/20'
+                      : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 font-bold text-xs">
+                    <Sparkles className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                    <span>Form + Auto-Redirect</span>
+                  </div>
+                  <p className="text-[10px] text-slate-500 mt-1 leading-snug">
+                    3 quick questions, then auto-redirects customer to Google Review.
+                  </p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setTemplateType('direct_review')}
+                  className={`p-3 rounded-2xl border text-left transition-all cursor-pointer ${
+                    templateType === 'direct_review'
+                      ? 'bg-amber-50/80 border-amber-500 text-amber-950 shadow-xs ring-1 ring-amber-500/20'
+                      : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 font-bold text-xs">
+                    <Star className="w-3.5 h-3.5 fill-amber-500 text-amber-500 shrink-0" />
+                    <span>Direct Google Review</span>
+                  </div>
+                  <p className="text-[10px] text-slate-500 mt-1 leading-snug">
+                    Sends customer directly to your Google Review URL.
+                  </p>
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Message Preview */}
           {!phoneError && (

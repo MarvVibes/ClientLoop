@@ -41,7 +41,7 @@ import {
   Laptop,
   Compass
 } from 'lucide-react'
-import { store, DEFAULT_DISCOVERY_SOURCES } from '../../lib/services/store'
+import { store, DEFAULT_DISCOVERY_SOURCES, generateUuid } from '../../lib/services/store'
 import { whatsappQueue } from '../../lib/messaging/messageQueue'
 import { normalizePhoneNumber } from '../../lib/phone/normalize'
 import { Business, Customer, Visit, QuestionnaireToken, Message, WorkspaceRole } from '../../lib/types/database'
@@ -479,7 +479,7 @@ export const StaffPortal: React.FC<StaffPortalProps> = ({
     }
     const serviceNames = setupForm.services.split(',').map(s => s.trim()).filter(Boolean)
     const newBiz: Business = {
-      id: `biz_${Math.random().toString(36).substring(2, 10)}`,
+      id: generateUuid(),
       name: setupForm.name.trim(),
       slug: setupForm.name.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, ''),
       category: setupForm.category,

@@ -30,6 +30,20 @@ export const DEFAULT_DISCOVERY_SOURCES = [
   'Prefer not to say'
 ]
 
+/**
+ * Universal RFC4122 v4 UUID generator compliant with PostgreSQL UUID constraints
+ */
+export function generateUuid(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0
+    const v = c === 'x' ? r : (r & 0x3) | 0x8
+    return v.toString(16)
+  })
+}
+
 // Test fixture businesses retained strictly for development / automated test execution
 export const TEST_FIXTURE_BUSINESSES: Business[] = [
   {
@@ -308,7 +322,7 @@ class ClientLoopStore {
     }
 
     const newCustomer: Customer = {
-      id: `cust_${Math.random().toString(36).substring(2, 10)}`,
+      id: generateUuid(),
       business_id: businessId,
       name: data.name || null,
       normalized_phone: normalized.e164,
@@ -368,7 +382,7 @@ class ClientLoopStore {
     const isReturningClient = priorVisits.length > 0
 
     const newVisit: Visit = {
-      id: `visit_${Math.random().toString(36).substring(2, 10)}`,
+      id: generateUuid(),
       business_id: businessId,
       customer_id: data.customerId,
       service: data.service,
@@ -394,7 +408,7 @@ class ClientLoopStore {
 
       // Log mock message in queue
       this.messages.unshift({
-        id: `msg_${Math.random().toString(36).substring(2, 8)}`,
+        id: generateUuid(),
         business_id: businessId,
         customer_id: customer.id,
         visit_id: newVisit.id,
@@ -428,7 +442,7 @@ class ClientLoopStore {
     const tokenHash = Array.from(array, byte => byte.toString(16).padStart(2, '0')).join('')
 
     const token: QuestionnaireToken = {
-      id: `tok_${Math.random().toString(36).substring(2, 10)}`,
+      id: generateUuid(),
       business_id: businessId,
       visit_id: visitId,
       customer_id: customerId,
@@ -451,6 +465,105 @@ class ClientLoopStore {
 
   findTokenByVisitId(visitId: string): QuestionnaireToken | undefined {
     return this.tokens.find(t => t.visit_id === visitId)
+  }
+
+  /**
+   * Hydrates remote public questionnaire context into local cache
+   * Ensures instant offline resilience and smooth form submission
+   */
+  hydrateTokenContext(ctx: {
+    tokenId: string
+    businessId: string
+    businessName: string
+    tokenHash: string
+    expiresAt: string
+    googleReviewUrl?: string | null
+    services?: Array<{ id: string; name: string; default_price?: number; default_duration_min?: number }>
+    discoverySourceOptions?: string[]
+    customerFirstName?: string
+    visitService?: string
+  }): void {
+    // 1. Ensure business exists in local cache
+    let biz = this.getBusinessById(ctx.businessId)
+    if (!biz) {
+      biz = {
+        id: ctx.businessId,
+        name: ctx.businessName,
+        slug: ctx.businessName.toLowerCase().replace(/[^a-z0-9]/g, '-'),
+        category: 'Service Business',
+        timezone: 'Africa/Lagos',
+        address: '',
+        google_review_url: ctx.googleReviewUrl || null,
+        branding: { primary_color: '#2563EB', logo_url: null },
+        services: ctx.services?.length ? ctx.services : [{ id: generateUuid(), name: ctx.visitService || 'Standard Service' }],
+        discovery_source_options: ctx.discoverySourceOptions?.length ? ctx.discoverySourceOptions : [...DEFAULT_DISCOVERY_SOURCES],
+        messaging_config: { provider: 'manual_click_to_chat', cooldown_hours: 72, auto_send_on_visit: false, whatsapp_phone_number_id: null },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      }
+      this.businesses.push(biz)
+    } else if (ctx.googleReviewUrl && !biz.google_review_url) {
+      biz.google_review_url = ctx.googleReviewUrl
+    }
+
+    // 2. Ensure customer placeholder exists
+    let cust = this.customers.find(c => c.business_id === ctx.businessId && c.name === (ctx.customerFirstName || 'Guest'))
+    if (!cust) {
+      const newCust: Customer = {
+        id: generateUuid(),
+        business_id: ctx.businessId,
+        name: ctx.customerFirstName || 'Guest',
+        normalized_phone: '+00000000000',
+        country_code: '+0',
+        first_discovery_source: null,
+        consent_status: 'implicit_transaction',
+        opted_out_at: null,
+        notes: null,
+        first_seen_at: new Date().toISOString(),
+        last_seen_at: new Date().toISOString(),
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      }
+      this.customers.push(newCust)
+      cust = newCust
+    }
+
+    // 3. Ensure visit placeholder exists
+    let visit = this.visits.find(v => v.business_id === ctx.businessId && v.customer_id === cust.id)
+    if (!visit) {
+      visit = {
+        id: generateUuid(),
+        business_id: ctx.businessId,
+        customer_id: cust.id,
+        service: ctx.visitService || 'General Service',
+        service_id: null,
+        staff_user_id: null,
+        status: 'completed',
+        questionnaire_status: 'sent',
+        visit_timestamp: new Date().toISOString(),
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      }
+      this.visits.push(visit)
+    }
+
+    // 4. Ensure token exists
+    let tok = this.findTokenByHash(ctx.tokenHash)
+    if (!tok) {
+      tok = {
+        id: ctx.tokenId,
+        business_id: ctx.businessId,
+        visit_id: visit.id,
+        customer_id: cust.id,
+        token_hash: ctx.tokenHash,
+        expires_at: ctx.expiresAt,
+        consumed_at: null,
+        revoked_at: null,
+        created_at: new Date().toISOString()
+      }
+      this.tokens.push(tok)
+    }
+    this.persist()
   }
 
   submitQuestionnaire(
@@ -487,7 +600,7 @@ class ClientLoopStore {
     }
 
     const submission: QuestionnaireSubmission = {
-      id: `sub_${Math.random().toString(36).substring(2, 10)}`,
+      id: generateUuid(),
       business_id: token.business_id,
       visit_id: token.visit_id,
       customer_id: token.customer_id,
@@ -541,7 +654,7 @@ class ClientLoopStore {
   // --- REVIEW CLICKS & INVITATION EVENTS ---
   recordReviewInvitationShown(businessId: string, customerId?: string, visitId?: string): ReviewActivity {
     const event: ReviewActivity = {
-      id: `rev_inv_${Math.random().toString(36).substring(2, 10)}`,
+      id: generateUuid(),
       business_id: businessId,
       customer_id: customerId || null,
       visit_id: visitId || null,
@@ -560,7 +673,7 @@ class ClientLoopStore {
 
   recordReviewClick(businessId: string, customerId?: string, visitId?: string): ReviewActivity {
     const event: ReviewActivity = {
-      id: `rev_clk_${Math.random().toString(36).substring(2, 10)}`,
+      id: generateUuid(),
       business_id: businessId,
       customer_id: customerId || null,
       visit_id: visitId || null,
@@ -603,7 +716,7 @@ class ClientLoopStore {
       msg.delivered_at = new Date().toISOString()
     } else {
       msg = {
-        id: `msg_${Math.random().toString(36).substring(2, 9)}`,
+        id: generateUuid(),
         business_id: businessId,
         customer_id: customerId,
         visit_id: visitId,
@@ -667,7 +780,7 @@ class ClientLoopStore {
     metadata: Record<string, unknown> = {}
   ): AuditEvent {
     const event: AuditEvent = {
-      id: `aud_${Math.random().toString(36).substring(2, 10)}`,
+      id: generateUuid(),
       business_id: businessId,
       actor_user_id: actorUserId,
       action,
