@@ -22,108 +22,90 @@ interface SignInModalProps {
 }
 
 export const SignInModal: React.FC<SignInModalProps> = ({ isOpen, onClose, onSuccessDemo }) => {
-  const [email, setEmail] = useState('demo@apexwellness.com')
-  const [workspace, setWorkspace] = useState('Apex Wellness & Aesthetics')
-  const [signedIn, setSignedIn] = useState(false)
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [isLoading, setIsLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-  const handleSignIn = (e: React.FormEvent) => {
+  const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault()
-    setSignedIn(true)
+    setError(null)
+    setIsLoading(true)
     setTimeout(() => {
-      if (onSuccessDemo) onSuccessDemo(workspace)
-      setSignedIn(false)
-      onClose()
-      // Scroll to dashboard preview
-      const preview = document.querySelector('#product-preview')
-      if (preview) preview.scrollIntoView({ behavior: 'smooth' })
-    }, 800)
+      setIsLoading(false)
+      if (onSuccessDemo) {
+        onClose()
+        onSuccessDemo('ClientLoop Workspace')
+      } else {
+        setError('Sign-in is not yet enabled. Request early access to join the beta.')
+      }
+    }, 600)
   }
 
   return (
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title="Sign in to Workspace"
-      subtitle="Select a demo workspace or enter your staff account credentials."
+      title="Sign in to ClientLoop"
+      subtitle="Enter your email and password to access your business dashboard."
     >
-      {signedIn ? (
-        <div className="p-6 text-center space-y-3">
-          <div className="w-12 h-12 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto">
-            <CheckCircle2 className="w-6 h-6" />
+      <form onSubmit={handleSignIn} className="space-y-4">
+        {error && (
+          <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 flex items-start gap-2">
+            <AlertCircle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
+            <span>{error}</span>
           </div>
-          <h4 className="text-base font-bold text-slate-900">Workspace Authenticated</h4>
-          <p className="text-xs text-slate-600">
-            Switching active session to <strong>{workspace}</strong>...
-          </p>
+        )}
+
+        <div>
+          <label className="text-xs font-semibold text-slate-700 block mb-1">
+            Email Address
+          </label>
+          <div className="relative">
+            <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              type="email"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@yourbusiness.com"
+              className="w-full text-xs sm:text-sm pl-9 pr-3 py-2.5 rounded-xl border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600"
+            />
+          </div>
         </div>
-      ) : (
-        <form onSubmit={handleSignIn} className="space-y-4">
-          <div className="p-3 bg-blue-50/70 border border-blue-200/70 rounded-xl text-xs text-blue-900 flex items-start gap-2">
-            <Zap className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
-            <div>
-              <strong>Sandbox Demo Mode:</strong> Select any sample business workspace to simulate the authenticated staff experience.
-            </div>
-          </div>
 
-          <div>
-            <label className="text-xs font-semibold text-slate-700 block mb-1">
-              Select Workspace
-            </label>
-            <select
-              value={workspace}
-              onChange={(e) => setWorkspace(e.target.value)}
-              className="w-full text-xs sm:text-sm p-2.5 rounded-xl border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600"
-            >
-              <option value="Apex Wellness & Aesthetics">Apex Wellness & Aesthetics (Medspa)</option>
-              <option value="Lumina Hair & Grooming Club">Lumina Hair & Grooming Club (Salon)</option>
-              <option value="Precision Auto Diagnostics">Precision Auto Diagnostics (Repair)</option>
-            </select>
+        <div>
+          <label className="text-xs font-semibold text-slate-700 block mb-1">
+            Password
+          </label>
+          <div className="relative">
+            <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              type="password"
+              required
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="••••••••••••"
+              className="w-full text-xs sm:text-sm pl-9 pr-3 py-2.5 rounded-xl border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600"
+            />
           </div>
+        </div>
 
-          <div>
-            <label className="text-xs font-semibold text-slate-700 block mb-1">
-              Staff Email Address
-            </label>
-            <div className="relative">
-              <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-              <input
-                type="email"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="w-full text-xs sm:text-sm pl-9 pr-3 py-2.5 rounded-xl border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600"
-              />
-            </div>
-          </div>
+        <div className="pt-2">
+          <button
+            type="submit"
+            disabled={isLoading}
+            className="w-full py-2.5 px-4 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white font-semibold text-xs sm:text-sm shadow-xs transition-colors"
+          >
+            {isLoading ? 'Signing in…' : 'Sign In →'}
+          </button>
+        </div>
 
-          <div>
-            <label className="text-xs font-semibold text-slate-700 block mb-1">
-              Password
-            </label>
-            <div className="relative">
-              <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-              <input
-                type="password"
-                defaultValue="••••••••••••"
-                className="w-full text-xs sm:text-sm pl-9 pr-3 py-2.5 rounded-xl border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600"
-              />
-            </div>
-          </div>
-
-          <div className="pt-2">
-            <button
-              type="submit"
-              className="w-full py-2.5 px-4 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs sm:text-sm shadow-xs transition-colors"
-            >
-              Enter Workspace Sandbox →
-            </button>
-          </div>
-
-          <p className="text-[11px] text-slate-400 text-center">
-            Row-Level Security isolates all tenant data • Password hashing via Supabase Auth
-          </p>
-        </form>
-      )}
+        <p className="text-[11px] text-slate-400 text-center">
+          Don't have an account?{' '}
+          <button type="button" onClick={onClose} className="text-blue-600 hover:underline font-semibold">Request early access</button>
+        </p>
+      </form>
     </Modal>
   )
 }
@@ -159,13 +141,10 @@ export const EarlyAccessModal: React.FC<EarlyAccessModalProps> = ({ isOpen, onCl
           <div className="w-12 h-12 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto">
             <CheckCircle2 className="w-6 h-6" />
           </div>
-          <h4 className="text-base font-bold text-slate-900">Application Registered</h4>
+          <h4 className="text-base font-bold text-slate-900">You're on the list!</h4>
           <p className="text-xs text-slate-600">
-            Thank you! We've logged your request for <strong>{businessName || 'your business'}</strong> on the <strong>{plan}</strong> plan.
+            Thank you! We've received your request for <strong>{businessName || 'your business'}</strong> on the <strong>{plan}</strong> plan. We'll be in touch with onboarding details shortly.
           </p>
-          <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-[11px] text-slate-500 text-left">
-            <strong>Demo Simulation:</strong> This form validates your fields locally. When the live beta batch is provisioned, onboarding invitations are sent to {email}.
-          </div>
           <button
             onClick={() => {
               setIsSuccess(false)
@@ -354,7 +333,7 @@ export const ContactModal: React.FC<{ isOpen: boolean; onClose: () => void }> = 
           </div>
           <h4 className="text-base font-bold text-slate-900">Message Sent!</h4>
           <p className="text-xs text-slate-600">
-            Thank you for reaching out. In this frontend prototype, your inquiry was handled in demo mode.
+            Thank you for reaching out. We'll get back to you within 1–2 business days.
           </p>
           <button
             onClick={() => {

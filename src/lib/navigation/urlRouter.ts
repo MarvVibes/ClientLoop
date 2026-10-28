@@ -97,7 +97,11 @@ export function parseRoute(rawUrl?: string | Location): RouteState {
  * Generates the canonical customer questionnaire URL for sharing or embedding.
  */
 export function buildQuestionnaireUrl(tokenHash: string, origin?: string): string {
+  const configuredEnvUrl = typeof import.meta !== 'undefined' && (import.meta.env?.VITE_APP_URL || import.meta.env?.VITE_APP_BASE_URL)
+    ? String(import.meta.env.VITE_APP_URL || import.meta.env.VITE_APP_BASE_URL).replace(/\/$/, '')
+    : ''
   const baseOrigin = origin 
+    || configuredEnvUrl
     || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:5173')
   return `${baseOrigin}/f/${encodeURIComponent(tokenHash)}`
 }

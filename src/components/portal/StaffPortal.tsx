@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import { Logo } from '../Logo'
 import { 
   Building2, 
@@ -35,9 +35,13 @@ import {
   Filter, 
   Eye, 
   RefreshCw,
-  Copy 
+  Copy,
+  LogOut,
+  FileText,
+  Laptop,
+  Compass
 } from 'lucide-react'
-import { store } from '../../lib/services/store'
+import { store, DEFAULT_DISCOVERY_SOURCES } from '../../lib/services/store'
 import { whatsappQueue } from '../../lib/messaging/messageQueue'
 import { normalizePhoneNumber } from '../../lib/phone/normalize'
 import { Business, Customer, Visit, QuestionnaireToken, Message, WorkspaceRole } from '../../lib/types/database'
@@ -47,25 +51,53 @@ import { googleReviewSync } from '../../lib/reviews/googleReviewSync'
 import { hasPermission } from '../../lib/auth/roles'
 import { buildQuestionnaireUrl } from '../../lib/navigation/urlRouter'
 import { ReportsView } from './ReportsView'
+import { QuestionnaireBuilder } from './QuestionnaireBuilder'
 import { WhatsAppClickToChatModal } from './WhatsAppClickToChatModal'
 import { classifyCustomerSegments, buildCustomerInsightProfile } from '../../lib/customers/segments'
 import { isSupabaseConfigured } from '../../lib/supabase/client'
+import {
+  buildFollowupMessageText,
+  formatPhoneForWhatsApp,
+  DEFAULT_WHATSAPP_INVITATION_TEMPLATE
+} from '../../lib/whatsapp/clickToChat'
 
 interface StaffPortalProps {
   onOpenCustomerQuestionnaire?: (tokenHash: string) => void
   onBackToLanding?: () => void
+  onSignOut?: () => void
+  business?: Business | null
+  onOpenOnboarding?: () => void
 }
 
 export const StaffPortal: React.FC<StaffPortalProps> = ({ 
   onOpenCustomerQuestionnaire, 
-  onBackToLanding 
+  onBackToLanding,
+  onSignOut,
+  business: initialBusiness,
+  onOpenOnboarding
 }) => {
   const businesses = store.getBusinesses()
-  const [selectedBusinessId, setSelectedBusinessId] = useState<string>(businesses[0]?.id || 'biz_paso_elite')
+  const [selectedBusinessId, setSelectedBusinessId] = useState<string>(
+    initialBusiness?.id || businesses[0]?.id || ''
+  )
   const [currentRole, setCurrentRole] = useState<WorkspaceRole>('manager')
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
+
+  // Business Setup Form State (shown when no business exists)
+  const [setupForm, setSetupForm] = useState({
+    name: '',
+    category: 'Hair Salon & Barbershop',
+    timezone: 'Africa/Lagos',
+    address: '',
+    phone: '',
+    services: 'General Service',
+    google_review_url: ''
+  })
+  const [setupDone, setSetupDone] = useState(false)
+  const [setupError, setSetupError] = useState<string | null>(null)
   
-  // Navigation: Overview, Clients, Visits, WhatsApp Reviews, Executive Reports, Settings
-  const [activeTab, setActiveTab] = useState<'overview' | 'clients' | 'visits' | 'reviews' | 'reports' | 'settings'>('overview')
+  // Navigation: Overview, Clients, Visits, WhatsApp Reviews, Questionnaire Builder, Executive Reports, Settings
+  const [activeTab, setActiveTab] = useState<'overview' | 'clients' | 'visits' | 'reviews' | 'questionnaire' | 'reports' | 'settings'>('overview')
   const [dashboardPreset, setDashboardPreset] = useState<DateRangePreset>('last_30_days')
 
   // WhatsApp Click-to-Chat Modal State
@@ -123,14 +155,14 @@ export const StaffPortal: React.FC<StaffPortalProps> = ({
   const [refreshKey, setRefreshKey] = useState(0)
 
   const currentBusiness = store.getBusinessById(selectedBusinessId) || businesses[0]
-  const defaultCountry = currentBusiness.timezone === 'Africa/Lagos' ? '+234' : '+1'
+  const defaultCountry = currentBusiness?.timezone === 'Africa/Lagos' ? '+234' : '+1'
 
   // Initialize service & settings on business change
   useEffect(() => {
-    if (currentBusiness.services.length > 0) {
+    if (currentBusiness?.services && currentBusiness.services.length > 0) {
       setSelectedService(currentBusiness.services[0].name)
     }
-    setGoogleReviewUrlInput(currentBusiness.google_review_url || '')
+    setGoogleReviewUrlInput(currentBusiness?.google_review_url || '')
     setPhoneInput('')
     setCustomerName('')
     setMatchedCustomer(null)
@@ -175,7 +207,7 @@ export const StaffPortal: React.FC<StaffPortalProps> = ({
     }
   }, [phoneInput, selectedBusinessId, defaultCountry])
 
-  // Handle Log Visit Form Submission
+  // Handle Log Visit Form Submission: Directly records visit, opens WhatsApp with the feedback form, and closes modal
   const handleSaveVisit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!phoneInput.trim() || !selectedService) return
@@ -188,36 +220,40 @@ export const StaffPortal: React.FC<StaffPortalProps> = ({
         notes: notes.trim() || null
       })
 
-      const { visit, isReturningClient, token } = store.recordVisit(selectedBusinessId, {
+      const { visit, token } = store.recordVisit(selectedBusinessId, {
         customerId: customer.id,
         service: selectedService,
         sendQuestionnaire: sendQuestionnaire && customer.consent_status !== 'opted_out'
       })
 
-      // Send WhatsApp follow-up if allowed
-      if (token && customer.consent_status !== 'opted_out') {
+      // Directly open WhatsApp with the pre-filled message & feedback form link
+      if (token && customer.consent_status !== 'opted_out' && sendQuestionnaire) {
         const questionnaireLink = buildQuestionnaireUrl(token.token_hash)
-        await whatsappQueue.enqueueMessage({
-          businessId: selectedBusinessId,
-          customerId: customer.id,
-          visitId: visit.id,
-          recipientPhone: customer.normalized_phone,
-          templateName: 'post_visit_followup_v2',
-          parameters: {
-            customer_name: customer.name || 'Valued Client',
-            business_name: currentBusiness.name,
-            secure_form_link: questionnaireLink
-          },
-          idempotencyKey: `send_${visit.id}`
-        })
+        const msgText = buildFollowupMessageText(
+          DEFAULT_WHATSAPP_INVITATION_TEMPLATE,
+          customer.name || 'there',
+          currentBusiness.name,
+          questionnaireLink
+        )
+        const pRes = formatPhoneForWhatsApp(customer.normalized_phone, defaultCountry)
+        if (pRes.isValid) {
+          const universalUrl = `https://api.whatsapp.com/send?phone=${pRes.digitsOnly}&text=${encodeURIComponent(msgText)}`
+          // Open WhatsApp immediately while user gesture context is active
+          const win = window.open(universalUrl, '_blank')
+          if (!win) {
+            window.location.href = universalUrl
+          }
+          store.recordWhatsAppDispatch(selectedBusinessId, visit.id, customer.id, 'wa_me')
+        }
       }
 
-      setLastLoggedVisit({
-        visit,
-        isReturning: isReturningClient,
-        token,
-        customer
-      })
+      // Close modal immediately and show confirmation toast
+      setIsLogVisitModalOpen(false)
+      const noticeText = sendQuestionnaire 
+        ? `Visit recorded! WhatsApp opened to send feedback form to ${customer.name || 'client'}.`
+        : `Visit recorded for ${customer.name || 'client'}.`
+      setExportNotice(noticeText)
+      setTimeout(() => setExportNotice(null), 5000)
 
       // Reset form
       setPhoneInput('')
@@ -225,38 +261,11 @@ export const StaffPortal: React.FC<StaffPortalProps> = ({
       setNotes('')
       setMatchedCustomer(null)
       setRecentVisitWarning(null)
+      setLastLoggedVisit(null)
       setRefreshKey(prev => prev + 1)
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to record visit'
       alert(msg)
-    }
-  }
-
-  // Quick Demo Prefills
-  const handlePreFillReturning = () => {
-    if (selectedBusinessId === 'biz_paso_elite') {
-      setPhoneInput('0803 555 0192')
-      setCustomerName('Chioma Adebayo')
-      setSelectedService('Signature Beard Sculpt & Hot Towel')
-    } else if (selectedBusinessId === 'biz_lumina_spa') {
-      setPhoneInput('(555) 019-2834')
-      setCustomerName('Maya Lin')
-      setSelectedService('Custom Hydrafacial & LED Therapy')
-    } else {
-      setPhoneInput('(555) 018-9942')
-      setCustomerName('Dave Miller')
-      setSelectedService('Complete Brake & Rotor Service')
-    }
-  }
-
-  const handlePreFillNew = () => {
-    const randomSuffix = Math.floor(1000 + Math.random() * 9000)
-    if (defaultCountry === '+234') {
-      setPhoneInput(`0802 888 ${randomSuffix}`)
-      setCustomerName('Amaka Johnson')
-    } else {
-      setPhoneInput(`(555) 441-${randomSuffix}`)
-      setCustomerName('Sarah Connor')
     }
   }
 
@@ -390,26 +399,282 @@ export const StaffPortal: React.FC<StaffPortalProps> = ({
     return true
   })
 
-  // Mock Multi-week retention velocity spline points
-  const splineWeeks = [
-    { week: 'W1', label: 'Week 1', returning: 14, walkins: 6, date: 'June 07, 2026' },
-    { week: 'W2', label: 'Week 2', returning: 22, walkins: 11, date: 'June 14, 2026' },
-    { week: 'W3', label: 'Week 3', returning: 18, walkins: 8, date: 'June 21, 2026' },
-    { week: 'W4', label: 'Week 4', returning: 26, walkins: 12, date: 'June 28, 2026' },
-    { week: 'W5', label: 'Week 5', returning: 31, walkins: 9, date: 'July 05, 2026' },
-    { week: 'W6', label: 'Week 6', returning: 28, walkins: 14, date: 'July 12, 2026' },
-    { week: 'W7', label: 'Week 7', returning: 37, walkins: 18, date: 'July 19, 2026' },
-    { week: 'W8', label: 'Week 8', returning: 42, walkins: 15, date: 'July 26, 2026' },
-  ]
+  // Dynamic rolling weeks (last 8 weeks) computed from real logged visits
+  const splineWeeks = Array.from({ length: 8 }, (_, i) => {
+    const now = new Date()
+    const weekStart = new Date(now.getTime() - (7 - i) * 7 * 24 * 60 * 60 * 1000)
+    const weekEnd = new Date(weekStart.getTime() + 7 * 24 * 60 * 60 * 1000)
+
+    const wVisits = visits.filter(v => {
+      const vt = new Date(v.visit_timestamp || v.created_at).getTime()
+      return vt >= weekStart.getTime() && vt < weekEnd.getTime()
+    })
+
+    let returning = 0
+    let walkins = 0
+    for (const v of wVisits) {
+      const custVisits = visits.filter(cv => cv.customer_id === v.customer_id)
+      if (custVisits.length > 1) {
+        returning++
+      } else {
+        walkins++
+      }
+    }
+
+    const label = `Week ${i + 1}`
+    return {
+      week: `W${i + 1}`,
+      label,
+      returning,
+      walkins,
+      total: wVisits.length,
+      date: weekStart.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })
+    }
+  })
   const activeWeekData = splineWeeks[activeSplineIndex] || splineWeeks[6]
 
+  // Real Dynamic Retention Notifications derived from actual visits, feedback, and review actions
+  const reviewActs = store.getReviewActivities(selectedBusinessId)
+  const realNotifications = useMemo(() => {
+    const list: { id: string; title: string; subtitle: string; time: string; tab: 'visits' | 'reviews' | 'settings'; type: 'visit' | 'review' | 'feedback' }[] = []
+
+    for (const v of visits.slice(0, 6)) {
+      const c = store.findCustomerById(selectedBusinessId, v.customer_id)
+      const isFeedback = v.questionnaire_status === 'submitted'
+      list.push({
+        id: `v_${v.id}`,
+        title: isFeedback ? 'Feedback Received' : 'Visit Recorded',
+        subtitle: `${c?.name || 'Walk-in Client'} • ${v.service}`,
+        time: new Date(v.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        tab: isFeedback ? 'reviews' : 'visits',
+        type: isFeedback ? 'feedback' : 'visit'
+      })
+    }
+
+    for (const r of reviewActs.slice(0, 3)) {
+      list.push({
+        id: `r_${r.id}`,
+        title: '5★ Google Review Tapped',
+        subtitle: 'Customer clicked outbound Google review link',
+        time: new Date(r.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        tab: 'reviews',
+        type: 'review'
+      })
+    }
+
+    return list
+  }, [visits, reviewActs, selectedBusinessId])
+
+  // ── ONBOARDING SCREEN: No business profile yet ──────────────────────────
+  const handleCreateBusiness = (e: React.FormEvent) => {
+    e.preventDefault()
+    setSetupError(null)
+    if (!setupForm.name.trim()) {
+      setSetupError('Business name is required.')
+      return
+    }
+    if (!setupForm.address.trim()) {
+      setSetupError('Address is required.')
+      return
+    }
+    const serviceNames = setupForm.services.split(',').map(s => s.trim()).filter(Boolean)
+    const newBiz: Business = {
+      id: `biz_${Math.random().toString(36).substring(2, 10)}`,
+      name: setupForm.name.trim(),
+      slug: setupForm.name.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, ''),
+      category: setupForm.category,
+      timezone: setupForm.timezone,
+      address: setupForm.address.trim(),
+      google_review_url: setupForm.google_review_url ? setupForm.google_review_url.trim() : null,
+      branding: { primary_color: '#2563EB', logo_url: null },
+      services: serviceNames.map((name) => ({
+        id: `srv_${Math.random().toString(36).substring(2, 8)}`,
+        name
+      })),
+      discovery_source_options: [...DEFAULT_DISCOVERY_SOURCES],
+      messaging_config: {
+        provider: 'manual_click_to_chat',
+        cooldown_hours: 72,
+        auto_send_on_visit: true,
+        whatsapp_phone_number_id: null
+      },
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    }
+    store.createBusiness(newBiz)
+    setSelectedBusinessId(newBiz.id)
+    setSetupDone(true)
+    // Force re-render
+    window.location.reload()
+  }
+
+  if (businesses.length === 0 && !setupDone) {
+    return (
+      <div className="min-h-screen bg-[#F8FAFC] flex items-center justify-center p-4 font-sans">
+        <div className="w-full max-w-lg">
+          {/* Header */}
+          <div className="text-center mb-8">
+            <Logo className="h-8 mx-auto mb-4" />
+            <h1 className="text-2xl font-bold text-slate-900">Set up your business profile</h1>
+            <p className="text-sm text-slate-500 mt-1">
+              You'll get a dedicated dashboard to track clients, visits, and reviews.
+            </p>
+          </div>
+
+          {/* Card */}
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-5">
+            {setupError && (
+              <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                {setupError}
+              </div>
+            )}
+
+            <form onSubmit={handleCreateBusiness} className="space-y-4">
+              {/* Business Name */}
+              <div>
+                <label className="text-xs font-semibold text-slate-700 block mb-1">Business Name *</label>
+                <input
+                  type="text"
+                  required
+                  value={setupForm.name}
+                  onChange={e => setSetupForm(f => ({ ...f, name: e.target.value }))}
+                  placeholder="e.g. Glow Beauty Studio"
+                  className="w-full text-sm p-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                />
+              </div>
+
+              {/* Google Review Link (URL) */}
+              <div>
+                <label className="text-xs font-semibold text-slate-700 block mb-1">Google Review Link (URL) *</label>
+                <input
+                  type="url"
+                  required
+                  value={setupForm.google_review_url}
+                  onChange={e => setSetupForm(f => ({ ...f, google_review_url: e.target.value }))}
+                  placeholder="e.g. https://g.page/r/... or https://maps.google.com/..."
+                  className="w-full text-sm p-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                />
+                <p className="text-[11px] text-slate-400 mt-1">
+                  When clients fill out their WhatsApp check-in form, they will automatically be redirected here to leave a review.
+                </p>
+              </div>
+
+              {/* Category + Timezone */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-semibold text-slate-700 block mb-1">Business Category *</label>
+                  <select
+                    value={setupForm.category}
+                    onChange={e => setSetupForm(f => ({ ...f, category: e.target.value }))}
+                    className="w-full text-sm p-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                  >
+                    <option>Hair Salon & Barbershop</option>
+                    <option>Nail Salon</option>
+                    <option>Medspa & Aesthetics</option>
+                    <option>Wellness & Massage</option>
+                    <option>Auto Repair & Diagnostics</option>
+                    <option>Dental Clinic</option>
+                    <option>Physiotherapy & Rehab</option>
+                    <option>Dry Cleaning & Laundry</option>
+                    <option>Restaurant & Hospitality</option>
+                    <option>Professional Services</option>
+                    <option>Other</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-slate-700 block mb-1">Timezone *</label>
+                  <select
+                    value={setupForm.timezone}
+                    onChange={e => setSetupForm(f => ({ ...f, timezone: e.target.value }))}
+                    className="w-full text-sm p-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                  >
+                    <option value="Africa/Lagos">Africa/Lagos (WAT)</option>
+                    <option value="Africa/Nairobi">Africa/Nairobi (EAT)</option>
+                    <option value="Africa/Accra">Africa/Accra (GMT)</option>
+                    <option value="Africa/Johannesburg">Africa/Johannesburg (SAST)</option>
+                    <option value="America/New_York">America/New_York (EST)</option>
+                    <option value="America/Chicago">America/Chicago (CST)</option>
+                    <option value="America/Los_Angeles">America/Los_Angeles (PST)</option>
+                    <option value="America/Toronto">America/Toronto (EST)</option>
+                    <option value="Europe/London">Europe/London (GMT)</option>
+                    <option value="Europe/Paris">Europe/Paris (CET)</option>
+                    <option value="Asia/Dubai">Asia/Dubai (GST)</option>
+                    <option value="Asia/London">Asia/Kolkata (IST)</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Address */}
+              <div>
+                <label className="text-xs font-semibold text-slate-700 block mb-1">Business Address *</label>
+                <input
+                  type="text"
+                  required
+                  value={setupForm.address}
+                  onChange={e => setSetupForm(f => ({ ...f, address: e.target.value }))}
+                  placeholder="e.g. 12 Marina Road, Lagos, Nigeria"
+                  className="w-full text-sm p-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                />
+              </div>
+
+              {/* Services */}
+              <div>
+                <label className="text-xs font-semibold text-slate-700 block mb-1">
+                  Services Offered <span className="font-normal text-slate-400">(comma-separated)</span>
+                </label>
+                <input
+                  type="text"
+                  value={setupForm.services}
+                  onChange={e => setSetupForm(f => ({ ...f, services: e.target.value }))}
+                  placeholder="e.g. Haircut, Beard Trim, Wash & Style"
+                  className="w-full text-sm p-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                />
+                <p className="text-[11px] text-slate-400 mt-1">You can add or edit services anytime in Settings.</p>
+              </div>
+
+              <button
+                type="submit"
+                className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-sm shadow-sm transition-colors cursor-pointer"
+              >
+                Create Business Dashboard →
+              </button>
+            </form>
+          </div>
+
+          {onBackToLanding && (
+            <button
+              onClick={onBackToLanding}
+              className="mt-4 w-full text-center text-xs text-slate-400 hover:text-blue-600 transition-colors"
+            >
+              ← Back to website
+            </button>
+          )}
+        </div>
+      </div>
+    )
+  }
+
   return (
+
     <div className="min-h-screen bg-[#F8FAFC] text-slate-900 flex font-sans selection:bg-blue-100 selection:text-blue-900">
 
       {/* =========================================================================
-          LEFT SIDEBAR (Clean White SaaS Sidebar Matching User's Preferred Layout)
+          MOBILE SIDEBAR OVERLAY BACKDROP
          ========================================================================= */}
-      <aside className="w-64 bg-white border-r border-slate-200/80 min-h-screen p-4 flex flex-col justify-between shrink-0 z-30 select-none">
+      {mobileSidebarOpen && (
+        <div 
+          className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-40 md:hidden"
+          onClick={() => setMobileSidebarOpen(false)}
+        />
+      )}
+
+      {/* =========================================================================
+          LEFT SIDEBAR
+         ========================================================================= */}
+      <aside className={`fixed md:static inset-y-0 left-0 w-72 md:w-64 bg-white border-r border-slate-200/80 min-h-screen p-4 flex flex-col justify-between shrink-0 z-50 select-none transition-transform duration-300 ${
+        mobileSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
+      }`}>
         
         <div>
           {/* Top Logo */}
@@ -420,6 +685,14 @@ export const StaffPortal: React.FC<StaffPortalProps> = ({
               className="cursor-pointer focus:outline-none"
             >
               <Logo className="h-7" />
+            </button>
+            {/* Mobile close button */}
+            <button
+              type="button"
+              onClick={() => setMobileSidebarOpen(false)}
+              className="md:hidden p-1.5 rounded-lg text-slate-500 hover:bg-slate-100"
+            >
+              <X className="w-4 h-4" />
             </button>
           </div>
 
@@ -472,6 +745,18 @@ export const StaffPortal: React.FC<StaffPortalProps> = ({
                     {selectedBusinessId === b.id && <Check className="w-4 h-4 text-blue-600 shrink-0" />}
                   </button>
                 ))}
+                {onOpenOnboarding && (
+                  <button
+                    onClick={() => {
+                      setBusinessDropdownOpen(false)
+                      onOpenOnboarding()
+                    }}
+                    className="w-full mt-1 pt-2 border-t border-slate-100 px-3 py-2 rounded-xl text-left text-xs font-semibold text-blue-600 hover:bg-blue-50 flex items-center gap-2 cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Set up another business</span>
+                  </button>
+                )}
               </div>
             )}
           </div>
@@ -492,7 +777,7 @@ export const StaffPortal: React.FC<StaffPortalProps> = ({
           <nav className="space-y-1.5 mt-6">
             
             <button
-              onClick={() => setActiveTab('overview')}
+              onClick={() => { setActiveTab('overview'); setMobileSidebarOpen(false) }}
               className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
                 activeTab === 'overview'
                   ? 'bg-blue-50/90 text-blue-600 font-bold'
@@ -506,7 +791,7 @@ export const StaffPortal: React.FC<StaffPortalProps> = ({
             </button>
 
             <button
-              onClick={() => setActiveTab('clients')}
+              onClick={() => { setActiveTab('clients'); setMobileSidebarOpen(false) }}
               className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
                 activeTab === 'clients'
                   ? 'bg-blue-50/90 text-blue-600 font-bold'
@@ -523,7 +808,7 @@ export const StaffPortal: React.FC<StaffPortalProps> = ({
             </button>
 
             <button
-              onClick={() => setActiveTab('visits')}
+              onClick={() => { setActiveTab('visits'); setMobileSidebarOpen(false) }}
               className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
                 activeTab === 'visits'
                   ? 'bg-blue-50/90 text-blue-600 font-bold'
@@ -540,7 +825,7 @@ export const StaffPortal: React.FC<StaffPortalProps> = ({
             </button>
 
             <button
-              onClick={() => setActiveTab('reviews')}
+              onClick={() => { setActiveTab('reviews'); setMobileSidebarOpen(false) }}
               className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
                 activeTab === 'reviews'
                   ? 'bg-blue-50/90 text-blue-600 font-bold'
@@ -557,7 +842,21 @@ export const StaffPortal: React.FC<StaffPortalProps> = ({
             </button>
 
             <button
-              onClick={() => setActiveTab('reports')}
+              onClick={() => { setActiveTab('questionnaire'); setMobileSidebarOpen(false) }}
+              className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
+                activeTab === 'questionnaire'
+                  ? 'bg-blue-50/90 text-blue-600 font-bold'
+                  : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <FileText className="w-4 h-4 text-amber-500" />
+                <span>Survey Builder</span>
+              </div>
+            </button>
+
+            <button
+              onClick={() => { setActiveTab('reports'); setMobileSidebarOpen(false) }}
               className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
                 activeTab === 'reports'
                   ? 'bg-blue-50/90 text-blue-600 font-bold'
@@ -574,7 +873,7 @@ export const StaffPortal: React.FC<StaffPortalProps> = ({
             </button>
 
             <button
-              onClick={() => setActiveTab('settings')}
+              onClick={() => { setActiveTab('settings'); setMobileSidebarOpen(false) }}
               className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
                 activeTab === 'settings'
                   ? 'bg-blue-50/90 text-blue-600 font-bold'
@@ -638,32 +937,43 @@ export const StaffPortal: React.FC<StaffPortalProps> = ({
       <div className="flex-1 flex flex-col min-w-0 overflow-x-hidden">
         
         {/* Top Header Bar for Main Content */}
-        <header className="h-16 bg-white/95 backdrop-blur-md border-b border-slate-200/80 px-6 sm:px-8 flex items-center justify-between sticky top-0 z-20 shadow-xs">
+        <header className="h-16 bg-white/95 backdrop-blur-md border-b border-slate-200/80 px-4 sm:px-6 md:px-8 flex items-center justify-between sticky top-0 z-20 shadow-xs">
           
-          {/* Breadcrumb Header */}
-          <div className="flex items-center gap-2 sm:gap-3">
-            <h1 className="text-base sm:text-lg font-bold text-slate-900 capitalize">
-              {activeTab === 'overview' && 'Dashboard Overview'}
-              {activeTab === 'clients' && 'Client Directory'}
-              {activeTab === 'visits' && 'Visits History'}
-              {activeTab === 'reviews' && 'WhatsApp Follow-ups & Reviews'}
-              {activeTab === 'reports' && 'Executive Performance Reports'}
-              {activeTab === 'settings' && 'Business Settings'}
+          {/* Mobile Hamburger + Breadcrumb */}
+          <div className="flex items-center gap-3">
+            {/* Hamburger - mobile only */}
+            <button
+              onClick={() => setMobileSidebarOpen(true)}
+              className="md:hidden p-2 rounded-xl text-slate-600 hover:bg-slate-100 transition-colors"
+              aria-label="Open menu"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+              </svg>
+            </button>
+
+            <div className="flex items-center gap-2">
+            <h1 className="text-sm sm:text-base md:text-lg font-bold text-slate-900 capitalize">
+              {activeTab === 'overview' && 'Overview'}
+              {activeTab === 'clients' && 'Clients'}
+              {activeTab === 'visits' && 'Visits'}
+              {activeTab === 'reviews' && 'WhatsApp'}
+              {activeTab === 'questionnaire' && 'Survey Builder'}
+              {activeTab === 'reports' && 'Reports'}
+              {activeTab === 'settings' && 'Settings'}
             </h1>
             <span className="text-xs text-slate-300 font-medium hidden sm:inline">•</span>
             {isSupabaseConfigured() ? (
               <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 hidden sm:inline-flex items-center gap-1">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                Supabase Connected
+                Live
               </span>
             ) : (
               <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 text-slate-600 border border-slate-200 hidden sm:inline-block">
-                Local Sandbox
+                Sandbox
               </span>
             )}
-            <span className="text-xs text-slate-500 font-medium hidden sm:inline">
-              {currentBusiness.name} ({currentBusiness.timezone})
-            </span>
+            </div>
           </div>
 
           {/* Right Header Action Items */}
@@ -705,9 +1015,11 @@ export const StaffPortal: React.FC<StaffPortalProps> = ({
                 aria-label="View notifications"
               >
                 <Bell className="w-4 h-4" />
-                <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-rose-500 text-white text-[9px] font-bold flex items-center justify-center shadow-xs animate-pulse">
-                  3
-                </span>
+                {realNotifications.length > 0 && (
+                  <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-rose-500 text-white text-[9px] font-bold flex items-center justify-center shadow-xs">
+                    {realNotifications.length}
+                  </span>
+                )}
               </button>
 
               {/* Notification Popover Drawer */}
@@ -716,61 +1028,56 @@ export const StaffPortal: React.FC<StaffPortalProps> = ({
                   <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-2">
                     <div className="flex items-center gap-2">
                       <Bell className="w-4 h-4 text-blue-600" />
-                      <h4 className="font-bold text-xs text-slate-900">Retention Alerts</h4>
+                      <h4 className="font-bold text-xs text-slate-900">Live Retention Alerts</h4>
                       <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-800">
-                        3 New
+                        {realNotifications.length} {realNotifications.length === 1 ? 'Alert' : 'Alerts'}
                       </span>
                     </div>
                     <button
                       onClick={() => setNotificationsOpen(false)}
                       className="text-xs text-blue-600 hover:text-blue-800 font-semibold cursor-pointer"
                     >
-                      Mark all read
+                      Close
                     </button>
                   </div>
 
                   <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
-                    <div 
-                      onClick={() => { setActiveTab('visits'); setNotificationsOpen(false) }}
-                      className="p-3 rounded-2xl bg-blue-50/60 hover:bg-blue-50 border border-blue-100/80 transition-colors cursor-pointer"
-                    >
-                      <div className="flex items-center justify-between text-[11px] font-bold text-blue-900">
-                        <span className="flex items-center gap-1.5">
-                          <CheckCircle2 className="w-3.5 h-3.5 text-blue-600" />
-                          Visit Completed
-                        </span>
-                        <span className="text-[10px] text-slate-400 font-mono">15m ago</span>
+                    {realNotifications.length === 0 ? (
+                      <div className="py-8 text-center space-y-1.5">
+                        <CheckCircle2 className="w-6 h-6 text-emerald-500 mx-auto" />
+                        <p className="text-xs font-bold text-slate-800">Everything is up to date</p>
+                        <p className="text-[11px] text-slate-500 max-w-xs mx-auto">
+                          Live retention alerts will appear here as client visits are recorded and Google reviews are tapped.
+                        </p>
                       </div>
-                      <p className="text-xs text-slate-600 mt-1">Chioma Adebayo completed Signature Beard Sculpt & Hot Towel</p>
-                    </div>
-
-                    <div 
-                      onClick={() => { setActiveTab('reviews'); setNotificationsOpen(false) }}
-                      className="p-3 rounded-2xl bg-emerald-50/60 hover:bg-emerald-50 border border-emerald-100/80 transition-colors cursor-pointer"
-                    >
-                      <div className="flex items-center justify-between text-[11px] font-bold text-emerald-900">
-                        <span className="flex items-center gap-1.5">
-                          <Star className="w-3.5 h-3.5 text-amber-500 fill-amber-500" />
-                          5★ Google Review Tapped
-                        </span>
-                        <span className="text-[10px] text-slate-400 font-mono">1h ago</span>
-                      </div>
-                      <p className="text-xs text-slate-600 mt-1">Marcus Vance tapped outbound Google review link</p>
-                    </div>
-
-                    <div 
-                      onClick={() => { setActiveTab('settings'); setNotificationsOpen(false) }}
-                      className="p-3 rounded-2xl bg-slate-50 hover:bg-slate-100/80 border border-slate-200/80 transition-colors cursor-pointer"
-                    >
-                      <div className="flex items-center justify-between text-[11px] font-bold text-slate-800">
-                        <span className="flex items-center gap-1.5">
-                          <ShieldCheck className="w-3.5 h-3.5 text-indigo-600" />
-                          Retention Cooldown Active
-                        </span>
-                        <span className="text-[10px] text-slate-400 font-mono">2h ago</span>
-                      </div>
-                      <p className="text-xs text-slate-600 mt-1">Emeka Okafor protected under 72h anti-spam window</p>
-                    </div>
+                    ) : (
+                      realNotifications.map(n => (
+                        <div
+                          key={n.id}
+                          onClick={() => { setActiveTab(n.tab); setNotificationsOpen(false) }}
+                          className={`p-3 rounded-2xl border transition-colors cursor-pointer ${
+                            n.type === 'review'
+                              ? 'bg-amber-50/60 hover:bg-amber-50 border-amber-100/80'
+                              : n.type === 'feedback'
+                              ? 'bg-emerald-50/60 hover:bg-emerald-50 border-emerald-100/80'
+                              : 'bg-blue-50/60 hover:bg-blue-50 border-blue-100/80'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between text-[11px] font-bold">
+                            <span className={`flex items-center gap-1.5 ${
+                              n.type === 'review' ? 'text-amber-900' : n.type === 'feedback' ? 'text-emerald-900' : 'text-blue-900'
+                            }`}>
+                              {n.type === 'review' && <Star className="w-3.5 h-3.5 text-amber-500 fill-amber-500" />}
+                              {n.type === 'feedback' && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />}
+                              {n.type === 'visit' && <Clock className="w-3.5 h-3.5 text-blue-600" />}
+                              {n.title}
+                            </span>
+                            <span className="text-[10px] text-slate-400 font-mono">{n.time}</span>
+                          </div>
+                          <p className="text-xs text-slate-600 mt-1">{n.subtitle}</p>
+                        </div>
+                      ))
+                    )}
                   </div>
 
                   <div className="pt-2 border-t border-slate-100 text-center">
@@ -796,6 +1103,18 @@ export const StaffPortal: React.FC<StaffPortalProps> = ({
               <Plus className="w-4 h-4" />
               <span>Log Visit</span>
             </button>
+
+            {onSignOut && (
+              <button
+                type="button"
+                onClick={onSignOut}
+                className="py-2 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition-colors flex items-center gap-1.5 cursor-pointer"
+                title="Sign out of workspace"
+              >
+                <LogOut className="w-3.5 h-3.5 text-slate-500" />
+                <span className="hidden sm:inline">Sign Out</span>
+              </button>
+            )}
 
           </div>
 
@@ -970,37 +1289,14 @@ export const StaffPortal: React.FC<StaffPortalProps> = ({
                   </div>
 
                   {dashboardMetrics.acquisitionSources.length === 0 ? (
-                    <div className="space-y-3 py-4">
-                      {/* Realistic baseline display when cold */}
-                      <div className="space-y-1.5 p-3 rounded-2xl hover:bg-slate-50 transition-colors">
-                        <div className="flex items-center justify-between text-xs font-semibold text-slate-700">
-                          <span>Friend or Family Recommendation</span>
-                          <span className="font-mono text-slate-500">2 clients (100%)</span>
-                        </div>
-                        <div className="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden">
-                          <div className="bg-gradient-to-r from-blue-600 to-indigo-600 h-full rounded-full w-full" />
-                        </div>
+                    <div className="py-8 px-4 text-center space-y-2.5">
+                      <div className="w-10 h-10 mx-auto rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center">
+                        <Compass className="w-5 h-5" />
                       </div>
-
-                      <div className="space-y-1.5 p-3 rounded-2xl hover:bg-slate-50 transition-colors opacity-60">
-                        <div className="flex items-center justify-between text-xs font-semibold text-slate-700">
-                          <span>Instagram / Social Media</span>
-                          <span className="font-mono text-slate-500">0 clients (0%)</span>
-                        </div>
-                        <div className="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden">
-                          <div className="bg-slate-200 h-full rounded-full w-0" />
-                        </div>
-                      </div>
-
-                      <div className="space-y-1.5 p-3 rounded-2xl hover:bg-slate-50 transition-colors opacity-60">
-                        <div className="flex items-center justify-between text-xs font-semibold text-slate-700">
-                          <span>Google Search / Maps</span>
-                          <span className="font-mono text-slate-500">0 clients (0%)</span>
-                        </div>
-                        <div className="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden">
-                          <div className="bg-slate-200 h-full rounded-full w-0" />
-                        </div>
-                      </div>
+                      <p className="text-xs font-bold text-slate-800">No acquisition channels captured yet</p>
+                      <p className="text-[11px] text-slate-500 max-w-sm mx-auto leading-relaxed">
+                        When clients complete their feedback questionnaire via WhatsApp, their discovery channels (Instagram, Google Maps, Referrals, Walk-ins) will automatically be charted here.
+                      </p>
                     </div>
                   ) : (
                     <div className="space-y-3">
@@ -1577,58 +1873,60 @@ export const StaffPortal: React.FC<StaffPortalProps> = ({
           )}
 
           {/* =========================================================================
-              VIEW 4: WHATSAPP REVIEWS (Queue, Cloud Engine & Review Funnel)
+              VIEW 4: WHATSAPP REVIEWS (Direct Follow-up Dispatcher & Review Funnel)
              ========================================================================= */}
           {activeTab === 'reviews' && (
             <div className="space-y-6 animate-in fade-in duration-150">
               
-              {/* Meta Cloud Status Banner */}
-              <div className="p-4 bg-gradient-to-r from-emerald-950 via-teal-950 to-slate-950 text-white rounded-3xl border border-emerald-800/40 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              {/* Direct Follow-up Dispatcher Banner */}
+              <div className="p-5 bg-gradient-to-r from-emerald-950 via-teal-950 to-slate-950 text-white rounded-3xl border border-emerald-800/40 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-2xl bg-emerald-600/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0">
                     <MessageCircle className="w-5 h-5" />
                   </div>
                   <div>
                     <div className="flex items-center gap-2">
-                      <span className="font-bold text-sm text-white">Meta Cloud WhatsApp Engine</span>
+                      <span className="font-bold text-sm text-white">WhatsApp Client Follow-up Dispatcher</span>
                       <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                        OPERATIONAL
+                        DIRECT DISPATCH
                       </span>
                     </div>
                     <p className="text-xs text-emerald-200/80 mt-0.5">
-                      Webhook Latency: 42ms • Rate-limit Guard: 0 drops • 72-hr Cooldown Active
+                      Opens WhatsApp directly with the client message and feedback form • 100% deliverability • Zero API fees
                     </p>
                   </div>
                 </div>
 
                 <button
                   onClick={() => {
-                    setPhoneInput('0803 555 0192')
-                    setCustomerName('Chioma Adebayo')
+                    setLastLoggedVisit(null)
                     setIsLogVisitModalOpen(true)
                   }}
-                  className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-emerald-950 font-bold rounded-xl text-xs transition-all cursor-pointer self-start sm:self-auto"
+                  className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-emerald-950 font-bold rounded-xl text-xs transition-all cursor-pointer self-start sm:self-auto flex items-center gap-1.5 shrink-0"
                 >
-                  + Trigger Test Check-in
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Log Visit &amp; Send WhatsApp</span>
                 </button>
               </div>
 
               {/* KPI Strip */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div className="bg-white p-5 rounded-3xl border border-slate-200/80 shadow-xs">
-                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Follow-ups Dispatched</span>
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Follow-ups Created</span>
                   <div className="text-3xl font-black text-slate-900 mt-2 font-mono">{queueMessages.length}</div>
-                  <p className="text-xs text-emerald-600 font-semibold mt-1">Automated 30s trigger</p>
+                  <p className="text-xs text-slate-500 font-medium mt-1">Unique single-use feedback links</p>
                 </div>
                 <div className="bg-white p-5 rounded-3xl border border-slate-200/80 shadow-xs">
-                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Client Read Rate</span>
-                  <div className="text-3xl font-black text-blue-600 mt-2 font-mono">88%</div>
-                  <p className="text-xs text-slate-500 font-medium mt-1">Verified blue tick (✓✓)</p>
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Feedback Completed</span>
+                  <div className="text-3xl font-black text-emerald-600 mt-2 font-mono">{dashboardMetrics.questionnairesCompleted}</div>
+                  <p className="text-xs text-emerald-600 font-semibold mt-1">
+                    {dashboardMetrics.questionnairesSent > 0 ? `${dashboardMetrics.questionnaireCompletionRate}% response rate` : 'Awaiting client submissions'}
+                  </p>
                 </div>
                 <div className="bg-white p-5 rounded-3xl border border-slate-200/80 shadow-xs">
-                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">5★ Google Reviews</span>
-                  <div className="text-3xl font-black text-amber-500 mt-2 font-mono">93</div>
-                  <p className="text-xs text-slate-500 font-medium mt-1">Outbound review link clicks</p>
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Google Review Clicks</span>
+                  <div className="text-3xl font-black text-amber-500 mt-2 font-mono">{dashboardMetrics.reviewLinkClicks}</div>
+                  <p className="text-xs text-slate-500 font-medium mt-1">Clients directed to your Google page</p>
                 </div>
               </div>
 
@@ -1636,7 +1934,7 @@ export const StaffPortal: React.FC<StaffPortalProps> = ({
               <div className="bg-white rounded-3xl border border-slate-200/80 shadow-xs overflow-hidden">
                 <div className="p-5 border-b border-slate-100 flex items-center justify-between">
                   <h3 className="font-bold text-sm text-slate-900">WhatsApp Client Follow-up Ledger</h3>
-                  <span className="text-xs font-mono text-slate-400">{queueMessages.length} Messages in Ledger</span>
+                  <span className="text-xs font-mono text-slate-400">{queueMessages.length} Follow-ups</span>
                 </div>
 
                 <div className="overflow-x-auto">
@@ -1645,8 +1943,8 @@ export const StaffPortal: React.FC<StaffPortalProps> = ({
                       <tr>
                         <th className="py-3.5 px-5">Recipient Client</th>
                         <th className="py-3.5 px-5">Message Purpose</th>
-                        <th className="py-3.5 px-5">Delivery Status</th>
-                        <th className="py-3.5 px-5">Sent Time</th>
+                        <th className="py-3.5 px-5">Status</th>
+                        <th className="py-3.5 px-5">Created Time</th>
                         <th className="py-3.5 px-5 text-right">Actions</th>
                       </tr>
                     </thead>
@@ -1654,12 +1952,13 @@ export const StaffPortal: React.FC<StaffPortalProps> = ({
                       {queueMessages.length === 0 ? (
                         <tr>
                           <td colSpan={5} className="py-12 text-center text-slate-400 italic">
-                            No follow-up messages sent yet. Log a visit to automatically trigger post-appointment follow-up.
+                            No follow-up messages logged yet. Log a client visit to generate a WhatsApp survey invitation.
                           </td>
                         </tr>
                       ) : (
                         queueMessages.map((msg: Message) => {
                           const cust = store.findCustomerById(selectedBusinessId, msg.customer_id)
+                          const relatedVisit = visits.find(v => v.id === msg.visit_id)
                           return (
                             <tr key={msg.id} className="hover:bg-slate-50/80 transition-colors">
                               <td className="py-4 px-5">
@@ -1672,36 +1971,34 @@ export const StaffPortal: React.FC<StaffPortalProps> = ({
                               <td className="py-4 px-5">
                                 {msg.status === 'read' && (
                                   <span className="px-2.5 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200 font-bold text-[10px]">
-                                    ✓✓ Read by Client
+                                    ✓ Completed Form
                                   </span>
                                 )}
                                 {msg.status === 'delivered' && (
                                   <span className="px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold text-[10px]">
-                                    ✓ Delivered
+                                    ✓ Sent via WhatsApp
                                   </span>
                                 )}
-                                {msg.status === 'queued' && (
+                                {(msg.status === 'queued' || !msg.status) && (
                                   <span className="px-2.5 py-1 rounded-full bg-amber-50 text-amber-700 border border-amber-200 font-bold text-[10px]">
-                                    Queued
+                                    Ready to Send
                                   </span>
                                 )}
                               </td>
                               <td className="py-4 px-5 font-mono text-xs text-slate-500">
-                                {new Date(msg.created_at).toLocaleTimeString()}
+                                {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                               </td>
                               <td className="py-4 px-5 text-right">
-                                {msg.provider_message_id && msg.status === 'delivered' ? (
+                                {cust && relatedVisit ? (
                                   <button
-                                    onClick={() => {
-                                      whatsappQueue.simulateReadStatus(msg.provider_message_id!)
-                                      setRefreshKey(prev => prev + 1)
-                                    }}
-                                    className="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold cursor-pointer shadow-xs transition-colors"
+                                    onClick={() => handleOpenWhatsAppClickToChat(cust, relatedVisit)}
+                                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold cursor-pointer shadow-xs transition-colors inline-flex items-center gap-1.5"
                                   >
-                                    Mark as Read ✓✓
+                                    <MessageCircle className="w-3.5 h-3.5" />
+                                    <span>Open WhatsApp</span>
                                   </button>
                                 ) : (
-                                  <span className="text-xs text-slate-400 font-mono">Synced</span>
+                                  <span className="text-xs text-slate-400 font-mono">Logged</span>
                                 )}
                               </td>
                             </tr>
@@ -1717,7 +2014,14 @@ export const StaffPortal: React.FC<StaffPortalProps> = ({
           )}
 
           {/* =========================================================================
-              VIEW 5: EXECUTIVE REPORTS (Weekly & Monthly Performance & Insights)
+              VIEW 5: SURVEY BUILDER (Questionnaire Configuration & Live Preview)
+             ========================================================================= */}
+          {activeTab === 'questionnaire' && (
+            <QuestionnaireBuilder business={currentBusiness} />
+          )}
+
+          {/* =========================================================================
+              VIEW 6: EXECUTIVE REPORTS (Weekly & Monthly Performance & Insights)
              ========================================================================= */}
           {activeTab === 'reports' && (
             <ReportsView business={currentBusiness} />
@@ -2067,242 +2371,140 @@ export const StaffPortal: React.FC<StaffPortalProps> = ({
 
             {/* Scrollable Modal Body */}
             <div className="p-6 overflow-y-auto space-y-5 flex-1">
-              
-              {/* Quick Demo Pre-fill helper */}
-              <div className="flex items-center justify-between p-3 rounded-2xl bg-slate-50 border border-slate-200/80 text-xs">
-                <span className="text-slate-600 font-semibold">Test with sample data:</span>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={handlePreFillReturning}
-                    className="px-2.5 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold cursor-pointer transition-colors"
-                  >
-                    Fill Returning Client
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handlePreFillNew}
-                    className="px-2.5 py-1 rounded-lg bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold cursor-pointer transition-colors"
-                  >
-                    Fill New Client
-                  </button>
-                </div>
-              </div>
-
-              {/* Success Card when Visit is Logged */}
-              {lastLoggedVisit ? (
-                <div className="p-6 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-950 space-y-4 animate-in fade-in">
-                  <div className="flex items-center gap-3">
-                    <CheckCircle2 className="w-6 h-6 text-emerald-600 shrink-0" />
-                    <div>
-                      <h4 className="font-bold text-base text-emerald-900">
-                        Visit Recorded for {lastLoggedVisit.customer.name || 'Client'}!
-                      </h4>
-                      <p className="text-xs text-emerald-700 mt-0.5">
-                        Service: {lastLoggedVisit.visit.service} • {lastLoggedVisit.isReturning ? 'Returning Client' : 'First-time Walk-in'}
-                      </p>
-                    </div>
+              <form id="logVisitForm" onSubmit={handleSaveVisit} className="space-y-4">
+                
+                {/* Phone */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-800 uppercase tracking-wider mb-1.5">
+                    Customer WhatsApp Phone Number *
+                  </label>
+                  <div className="flex gap-2">
+                    <span className="px-3.5 py-2.5 bg-slate-100 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 flex items-center">
+                      {defaultCountry}
+                    </span>
+                    <input
+                      type="text"
+                      required
+                      placeholder={defaultCountry === '+234' ? '0803 123 4567' : '(555) 019-2834'}
+                      value={phoneInput}
+                      onChange={(e) => setPhoneInput(e.target.value)}
+                      className="flex-1 text-sm px-4 py-2.5 rounded-xl border border-slate-200 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+                    />
                   </div>
 
-                  {lastLoggedVisit.token && (
-                    <div className="p-4 rounded-xl bg-white border border-emerald-200 space-y-3">
-                      <p className="text-xs text-slate-600 leading-relaxed font-medium">
-                        WhatsApp message queued with secure single-use link:
-                      </p>
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="text"
-                          readOnly
-                          value={buildQuestionnaireUrl(lastLoggedVisit.token.token_hash)}
-                          className="flex-1 px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-700 font-mono select-all focus:outline-none"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const url = buildQuestionnaireUrl(lastLoggedVisit.token!.token_hash)
-                            navigator.clipboard?.writeText(url)
-                            setCopiedTokenUrl(true)
-                            setTimeout(() => setCopiedTokenUrl(false), 2000)
-                          }}
-                          className="px-3 py-2 bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors shrink-0"
-                          title="Copy Link to Clipboard"
-                        >
-                          {copiedTokenUrl ? (
-                            <>
-                              <Check className="w-3.5 h-3.5 text-emerald-600" />
-                              <span className="text-emerald-700">Copied!</span>
-                            </>
-                          ) : (
-                            <>
-                              <Copy className="w-3.5 h-3.5 text-slate-600" />
-                              <span>Copy Link</span>
-                            </>
-                          )}
-                        </button>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setIsLogVisitModalOpen(false)
-                          if (onOpenCustomerQuestionnaire && lastLoggedVisit.token) {
-                            onOpenCustomerQuestionnaire(lastLoggedVisit.token.token_hash)
-                          }
-                        }}
-                        className="w-full py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs sm:text-sm font-bold flex items-center justify-center gap-2 shadow-xs cursor-pointer transition-colors"
-                      >
-                        <ExternalLink className="w-4 h-4" />
-                        <span>Open Customer Questionnaire Preview →</span>
-                      </button>
+                  {matchedCustomer && (
+                    <div className="mt-2 p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <span>
+                        Returning Client: <strong>{matchedCustomer.name || 'Unnamed'}</strong> ({store.getCustomerVisits(selectedBusinessId, matchedCustomer.id).length} previous visits).
+                      </span>
                     </div>
                   )}
 
-                  <div className="flex justify-end gap-2 pt-2">
-                    <button
-                      type="button"
-                      onClick={() => setLastLoggedVisit(null)}
-                      className="px-4 py-2 bg-white text-slate-700 border border-slate-200 hover:bg-slate-50 text-xs font-bold rounded-xl cursor-pointer"
-                    >
-                      Log Another Visit
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setIsLogVisitModalOpen(false)}
-                      className="px-4 py-2 bg-emerald-600 text-white hover:bg-emerald-700 text-xs font-bold rounded-xl cursor-pointer"
-                    >
-                      Done
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <form id="logVisitForm" onSubmit={handleSaveVisit} className="space-y-4">
-                  
-                  {/* Phone */}
-                  <div>
-                    <label className="block text-xs font-bold text-slate-800 uppercase tracking-wider mb-1.5">
-                      Customer WhatsApp Phone Number *
-                    </label>
-                    <div className="flex gap-2">
-                      <span className="px-3.5 py-2.5 bg-slate-100 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 flex items-center">
-                        {defaultCountry}
-                      </span>
-                      <input
-                        type="text"
-                        required
-                        placeholder={defaultCountry === '+234' ? '0803 123 4567' : '(555) 019-2834'}
-                        value={phoneInput}
-                        onChange={(e) => setPhoneInput(e.target.value)}
-                        className="flex-1 text-sm px-4 py-2.5 rounded-xl border border-slate-200 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
-                      />
+                  {recentVisitWarning && (
+                    <div className="mt-2 p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs flex items-center gap-2">
+                      <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                      <span>{recentVisitWarning}</span>
                     </div>
+                  )}
+                </div>
 
-                    {matchedCustomer && (
-                      <div className="mt-2 p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs flex items-center gap-2">
-                        <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                        <span>
-                          Returning Client: <strong>{matchedCustomer.name || 'Unnamed'}</strong> ({store.getCustomerVisits(selectedBusinessId, matchedCustomer.id).length} previous visits).
-                        </span>
-                      </div>
-                    )}
+                {/* Name */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-800 uppercase tracking-wider mb-1.5">
+                    Customer Name (Optional for first-time walk-in)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Chioma Adebayo"
+                    value={customerName}
+                    onChange={(e) => setCustomerName(e.target.value)}
+                    className="w-full text-xs px-4 py-2.5 rounded-xl border border-slate-200 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 font-medium"
+                  />
+                </div>
 
-                    {recentVisitWarning && (
-                      <div className="mt-2 p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs flex items-center gap-2">
-                        <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
-                        <span>{recentVisitWarning}</span>
-                      </div>
-                    )}
-                  </div>
+                {/* Service */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-800 uppercase tracking-wider mb-1.5">
+                    Service Rendered *
+                  </label>
+                  <select
+                    value={selectedService}
+                    onChange={(e) => setSelectedService(e.target.value)}
+                    className="w-full text-xs px-4 py-2.5 rounded-xl border border-slate-200 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer font-medium"
+                  >
+                    {currentBusiness.services.map((srv) => (
+                      <option key={srv.id} value={srv.name}>
+                        {srv.name} {srv.default_price ? `(${currentBusiness.timezone === 'Africa/Lagos' ? '₦' : '$'}${srv.default_price.toLocaleString()})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
 
-                  {/* Name */}
-                  <div>
-                    <label className="block text-xs font-bold text-slate-800 uppercase tracking-wider mb-1.5">
-                      Customer Name (Optional for first-time walk-in)
-                    </label>
+                {/* Staff Private Notes */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-800 uppercase tracking-wider mb-1.5">
+                    Private Staff Notes (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Regular stylist, prefers extra conditioner"
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value)}
+                    className="w-full text-xs px-4 py-2.5 rounded-xl border border-slate-200 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+
+                {/* Send Follow-Up Checkbox */}
+                <div className="pt-1">
+                  <label className="flex items-start gap-3 p-3 rounded-2xl bg-slate-50 border border-slate-200/80 cursor-pointer hover:bg-slate-100 transition-colors">
                     <input
-                      type="text"
-                      placeholder="e.g. Chioma Adebayo"
-                      value={customerName}
-                      onChange={(e) => setCustomerName(e.target.value)}
-                      className="w-full text-xs px-4 py-2.5 rounded-xl border border-slate-200 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 font-medium"
+                      type="checkbox"
+                      checked={sendQuestionnaire}
+                      onChange={(e) => setSendQuestionnaire(e.target.checked)}
+                      className="mt-0.5 rounded text-emerald-600 focus:ring-emerald-500 w-4 h-4 cursor-pointer"
                     />
-                  </div>
+                    <div>
+                      <span className="text-xs font-bold text-slate-900 block">
+                        Send Client Check-in Form via WhatsApp
+                      </span>
+                      <span className="text-[11px] text-slate-500 block mt-0.5 leading-relaxed">
+                        Client receives a 3-field form (Name, First-time vs Returning, How they found us) and then drops an honest Google review.
+                      </span>
+                    </div>
+                  </label>
+                </div>
 
-                  {/* Service */}
-                  <div>
-                    <label className="block text-xs font-bold text-slate-800 uppercase tracking-wider mb-1.5">
-                      Service Rendered *
-                    </label>
-                    <select
-                      value={selectedService}
-                      onChange={(e) => setSelectedService(e.target.value)}
-                      className="w-full text-xs px-4 py-2.5 rounded-xl border border-slate-200 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer font-medium"
-                    >
-                      {currentBusiness.services.map((srv) => (
-                        <option key={srv.id} value={srv.name}>
-                          {srv.name} {srv.default_price ? `(${currentBusiness.timezone === 'Africa/Lagos' ? '₦' : '$'}${srv.default_price.toLocaleString()})` : ''}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {/* Staff Private Notes */}
-                  <div>
-                    <label className="block text-xs font-bold text-slate-800 uppercase tracking-wider mb-1.5">
-                      Private Staff Notes (Optional)
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="e.g. Regular stylist, prefers extra conditioner"
-                      value={notes}
-                      onChange={(e) => setNotes(e.target.value)}
-                      className="w-full text-xs px-4 py-2.5 rounded-xl border border-slate-200 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                  </div>
-
-                  {/* Send Follow-Up Checkbox */}
-                  <div className="pt-1">
-                    <label className="flex items-start gap-3 p-3 rounded-2xl bg-slate-50 border border-slate-200/80 cursor-pointer hover:bg-slate-100 transition-colors">
-                      <input
-                        type="checkbox"
-                        checked={sendQuestionnaire}
-                        onChange={(e) => setSendQuestionnaire(e.target.checked)}
-                        className="mt-0.5 rounded text-blue-600 focus:ring-blue-500 w-4 h-4"
-                      />
-                      <div>
-                        <span className="text-xs font-bold text-slate-900 block">
-                          Send WhatsApp Follow-up &amp; Review Link
-                        </span>
-                        <span className="text-[11px] text-slate-500 block mt-0.5 leading-relaxed">
-                          Customer will receive a friendly 30-second feedback link on WhatsApp.
-                        </span>
-                      </div>
-                    </label>
-                  </div>
-
-                </form>
-              )}
-
+              </form>
             </div>
 
             {/* Pinned Modal Footer */}
-            {!lastLoggedVisit && (
-              <div className="px-6 py-4 border-t border-slate-100 bg-slate-50 flex items-center justify-end gap-3 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => setIsLogVisitModalOpen(false)}
-                  className="px-4 py-2 text-slate-600 hover:text-slate-900 font-bold text-xs cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  form="logVisitForm"
-                  className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-xs shadow-xs transition-all flex items-center gap-1.5 cursor-pointer shadow-blue-500/20 active:scale-98"
-                >
-                  <CheckCircle2 className="w-4 h-4" />
-                  <span>Save Visit &amp; Send Message</span>
-                </button>
-              </div>
-            )}
+            <div className="px-6 py-4 border-t border-slate-100 bg-slate-50 flex items-center justify-end gap-3 shrink-0">
+              <button
+                type="button"
+                onClick={() => setIsLogVisitModalOpen(false)}
+                className="px-4 py-2 text-slate-600 hover:text-slate-900 font-bold text-xs cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                form="logVisitForm"
+                className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs shadow-xs transition-all flex items-center gap-1.5 cursor-pointer shadow-emerald-500/20 active:scale-98"
+              >
+                {sendQuestionnaire ? (
+                  <>
+                    <MessageCircle className="w-4 h-4" />
+                    <span>Send Form via WhatsApp →</span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>Save Visit</span>
+                  </>
+                )}
+              </button>
+            </div>
 
           </div>
         </div>
@@ -2522,3 +2724,5 @@ export const StaffPortal: React.FC<StaffPortalProps> = ({
     </div>
   )
 }
+
+export default StaffPortal

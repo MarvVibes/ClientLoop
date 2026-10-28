@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
-    "test": "tsx --test tests/unit/phone_and_validation.test.ts tests/unit/customer_and_visit_services.test.ts tests/unit/whatsapp_messaging.test.ts tests/unit/dashboard_and_export.test.ts tests/unit/pilot_e2e_workflow.test.ts tests/unit/url_router.test.ts tests/unit/whatsapp_click_to_chat.test.ts tests/unit/customer_segments_and_reports.test.ts",
+    "test": "tsx --test tests/unit/phone_and_validation.test.ts tests/unit/customer_and_visit_services.test.ts tests/unit/whatsapp_messaging.test.ts tests/unit/dashboard_and_export.test.ts tests/unit/pilot_e2e_workflow.test.ts tests/unit/url_router.test.ts tests/unit/whatsapp_click_to_chat.test.ts tests/unit/customer_segments_and_reports.test.ts tests/unit/real_saas_acceptance.test.ts",
     "preview": "vite preview"
   },
   "dependencies": {

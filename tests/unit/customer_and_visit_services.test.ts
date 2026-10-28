@@ -131,3 +131,35 @@ test('Questionnaire Flow - Validates token, submits once, and prevents replay', 
   assert.equal(invalidResult.success, false)
   assert.equal(invalidResult.error, 'INVALID_TOKEN')
 })
+
+test('3-Field Customer Form - Saves client name, first-visit status, and discovery source', () => {
+  const bizId = 'biz_paso_elite'
+  // Walk-in client without initial name
+  const cust = store.createOrUpdateCustomer(bizId, {
+    phone: '0805 111 2233'
+  }).customer
+
+  const { token, visit } = store.recordVisit(bizId, {
+    customerId: cust.id,
+    service: 'Primary Service',
+    sendQuestionnaire: true
+  })
+
+  assert.ok(token)
+
+  // Client opens form via WhatsApp and enters their 3 fields
+  const subResult = store.submitQuestionnaire(token.token_hash, {
+    customerName: 'Amina Yusuf',
+    firstVisitAnswer: true,
+    discoverySourceAnswer: 'Instagram / Social Media'
+  })
+
+  assert.equal(subResult.success, true)
+  assert.equal(subResult.submission?.first_visit_answer, true)
+  assert.equal(subResult.submission?.discovery_source_answer, 'Instagram / Social Media')
+
+  // Customer record in store should have their entered name and discovery source updated
+  const updatedCustomer = store.findCustomerById(bizId, cust.id)
+  assert.equal(updatedCustomer?.name, 'Amina Yusuf')
+  assert.equal(updatedCustomer?.first_discovery_source, 'Instagram / Social Media')
+})

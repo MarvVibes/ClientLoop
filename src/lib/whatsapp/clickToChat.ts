@@ -33,8 +33,8 @@ export interface ClickToChatResult {
 /**
  * Standard neutral follow-up template conforming to communication ethics
  */
-export const DEFAULT_WHATSAPP_INVITATION_TEMPLATE = 
-  'Hello {{customer_name}}, thank you for visiting {{business_name}}! We’d appreciate your feedback in a quick 60-second questionnaire: {{questionnaire_link}} - Thank you!'
+export const DEFAULT_WHATSAPP_INVITATION_TEMPLATE =
+  'Hello {{customer_name}}, thank you for visiting {{business_name}}!\n\nWe\'d love your feedback - it only takes 60 seconds:\n{{questionnaire_link}}\n\nThank you!'
 
 /**
  * Formats a phone number for wa.me link (digits only, no '+' prefix or punctuation)

@@ -20,7 +20,10 @@ export class WhatsAppQueueService {
   }
 
   getMessagesByBusiness(businessId: string): Message[] {
-    return this.messageStore.filter(m => m.business_id === businessId)
+    const fromStore = store.getMessagesByBusiness(businessId)
+    const storeIds = new Set(fromStore.map(m => m.id))
+    const fromQueue = this.messageStore.filter(m => m.business_id === businessId && !storeIds.has(m.id))
+    return [...fromStore, ...fromQueue]
   }
 
   /**

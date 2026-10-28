@@ -93,7 +93,7 @@ export const Hero: React.FC<HeroProps> = ({ onOpenEarlyAccess, onExploreProduct 
               onClick={onOpenEarlyAccess}
               className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-3 text-sm font-medium text-white bg-blue-600 hover:bg-blue-500 active:bg-blue-700 rounded-full shadow-sm shadow-blue-500/20 transition-all cursor-pointer"
             >
-              Get early access
+              Get started free
               <ArrowRight className="w-4 h-4" />
             </button>
             <button
@@ -105,7 +105,7 @@ export const Hero: React.FC<HeroProps> = ({ onOpenEarlyAccess, onExploreProduct 
           </div>
 
           <p className="mt-6 text-[13px] text-slate-500">
-            Built for service businesses of every size.
+            Free forever · No credit card required · Built for service businesses of every size.
           </p>
         </div>
 

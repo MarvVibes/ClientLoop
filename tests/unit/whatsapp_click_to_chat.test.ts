@@ -58,3 +58,12 @@ test('WhatsApp Click-to-Chat - Honest Audit Logging marks attempt as manual with
   assert.equal(result.auditRecord.read_at, null)
   assert.ok(result.auditRecord.failure_reason?.includes('Manual staff workflow'))
 })
+
+test('WhatsApp Dispatch - Tracking updates message status to delivered in store', async () => {
+  const { store } = await import('../../src/lib/services/store')
+  const dispatched = store.recordWhatsAppDispatch('biz_paso_elite', 'visit_test_dispatch', 'cust_test_dispatch', 'wa_me')
+  assert.equal(dispatched.business_id, 'biz_paso_elite')
+  assert.equal(dispatched.visit_id, 'visit_test_dispatch')
+  assert.equal(dispatched.status, 'delivered')
+  assert.ok(dispatched.delivered_at)
+})

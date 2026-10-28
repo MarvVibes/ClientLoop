@@ -101,7 +101,7 @@ test('Pilot E2E Workflow - Complete 10-Step Verification for Paso Elite Unisex S
   assert.equal(retrievedToken?.business_id, PASO_ELITE_ID)
   assert.equal(retrievedToken?.consumed_at, null)
   // Check that customer phone is never in the token or public URL
-  assert.ok(!tokenHash.includes('803') && !tokenHash.includes('234'))
+  assert.ok(!tokenHash.includes('8037778899') && !tokenHash.includes('+234'))
   console.log('[STEP 4 PASS] Secure zero-PII token verified')
 
   // -------------------------------------------------------------

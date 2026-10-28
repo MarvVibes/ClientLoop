@@ -7,6 +7,7 @@ interface FooterProps {
   onOpenContact: () => void
   onOpenEarlyAccess: () => void
   onOpenSignIn: () => void
+  onOpenDashboard?: () => void
 }
 
 export const Footer: React.FC<FooterProps> = ({
@@ -14,7 +15,8 @@ export const Footer: React.FC<FooterProps> = ({
   onOpenTerms,
   onOpenContact,
   onOpenEarlyAccess,
-  onOpenSignIn
+  onOpenSignIn,
+  onOpenDashboard
 }) => {
   return (
     <footer className="border-t border-slate-200 bg-white py-16 px-5 sm:px-8 text-slate-600">
@@ -60,6 +62,17 @@ export const Footer: React.FC<FooterProps> = ({
                   FAQ
                 </a>
               </li>
+              {onOpenDashboard && (
+                <li>
+                  <button
+                    type="button"
+                    onClick={onOpenDashboard}
+                    className="hover:text-slate-900 transition-colors cursor-pointer text-left"
+                  >
+                    Staff Portal
+                  </button>
+                </li>
+              )}
             </ul>
           </div>
 

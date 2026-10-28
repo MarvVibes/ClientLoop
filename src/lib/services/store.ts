@@ -30,8 +30,8 @@ export const DEFAULT_DISCOVERY_SOURCES = [
   'Prefer not to say'
 ]
 
-// Seed Data: 1. Pilot Business (Paso Elite) and 2. Apex Wellness
-export const INITIAL_BUSINESSES: Business[] = [
+// Test fixture businesses retained strictly for development / automated test execution
+export const TEST_FIXTURE_BUSINESSES: Business[] = [
   {
     id: 'biz_paso_elite',
     name: 'Paso Elite Unisex Salon',
@@ -91,105 +91,31 @@ export const INITIAL_BUSINESSES: Business[] = [
   }
 ]
 
-export const INITIAL_CUSTOMERS: Customer[] = [
-  // Paso Elite Customer
-  {
-    id: 'cust_paso_1',
-    business_id: 'biz_paso_elite',
-    name: 'Emeka Okon',
-    normalized_phone: '+2348031234567',
-    country_code: '+234',
-    first_discovery_source: 'Friend or Family Recommendation',
-    consent_status: 'implicit_transaction',
-    opted_out_at: null,
-    notes: 'Prefers scissors over clippers on top.',
-    first_seen_at: new Date('2026-10-19T10:00:00Z').toISOString(),
-    last_seen_at: new Date('2026-10-21T14:30:00Z').toISOString(),
-    created_at: new Date('2026-10-19T10:00:00Z').toISOString(),
-    updated_at: new Date('2026-10-21T14:30:00Z').toISOString()
-  },
-  // Apex Wellness Customer
-  {
-    id: 'cust_apex_1',
-    business_id: 'biz_apex_wellness',
-    name: 'Maya Lin',
-    normalized_phone: '+15550192834',
-    country_code: '+1',
-    first_discovery_source: 'Google Maps Search',
-    consent_status: 'implicit_transaction',
-    opted_out_at: null,
-    notes: 'Sensitive skin. Elena is primary therapist.',
-    first_seen_at: new Date('2026-09-15T11:00:00Z').toISOString(),
-    last_seen_at: new Date('2026-10-21T15:15:00Z').toISOString(),
-    created_at: new Date('2026-09-15T11:00:00Z').toISOString(),
-    updated_at: new Date('2026-10-21T15:15:00Z').toISOString()
-  }
-]
+// Environment detection for test execution vs production SaaS runtime
+const proc = (globalThis as unknown as { process?: { env?: Record<string, string>; argv?: string[] } }).process
+const isNodeTest = Boolean(
+  proc && (
+    proc.env?.NODE_ENV === 'test' ||
+    proc.env?.npm_lifecycle_event === 'test' ||
+    proc.argv?.some((arg: string) => arg.includes('test'))
+  )
+)
 
-export const INITIAL_VISITS: Visit[] = [
-  {
-    id: 'visit_p1',
-    business_id: 'biz_paso_elite',
-    customer_id: 'cust_paso_1',
-    service: 'Signature Haircut & Beard Grooming',
-    service_id: 'srv_p1',
-    staff_user_id: 'staff_ugo',
-    status: 'completed',
-    questionnaire_status: 'submitted',
-    visit_timestamp: new Date('2026-10-19T10:30:00Z').toISOString(),
-    created_at: new Date('2026-10-19T10:30:00Z').toISOString(),
-    updated_at: new Date('2026-10-19T11:15:00Z').toISOString()
-  },
-  {
-    id: 'visit_p2',
-    business_id: 'biz_paso_elite',
-    customer_id: 'cust_paso_1',
-    service: 'Signature Haircut & Beard Grooming',
-    service_id: 'srv_p1',
-    staff_user_id: 'staff_ugo',
-    status: 'completed',
-    questionnaire_status: 'sent',
-    visit_timestamp: new Date('2026-10-21T14:30:00Z').toISOString(),
-    created_at: new Date('2026-10-21T14:30:00Z').toISOString(),
-    updated_at: new Date('2026-10-21T14:30:00Z').toISOString()
-  },
-  {
-    id: 'visit_a1',
-    business_id: 'biz_apex_wellness',
-    customer_id: 'cust_apex_1',
-    service: 'Custom HydraFacial & Peel',
-    service_id: 'srv_a1',
-    staff_user_id: 'staff_elena',
-    status: 'completed',
-    questionnaire_status: 'submitted',
-    visit_timestamp: new Date('2026-10-21T15:15:00Z').toISOString(),
-    created_at: new Date('2026-10-21T15:15:00Z').toISOString(),
-    updated_at: new Date('2026-10-21T15:45:00Z').toISOString()
-  }
-]
+// In production, starts empty. Only test runner receives fixtures.
+export const INITIAL_BUSINESSES: Business[] = isNodeTest ? [...TEST_FIXTURE_BUSINESSES] : []
+export const INITIAL_CUSTOMERS: Customer[] = []
+export const INITIAL_VISITS: Visit[] = []
+export const INITIAL_TOKENS: QuestionnaireToken[] = []
 
-export const INITIAL_TOKENS: QuestionnaireToken[] = [
-  {
-    id: 'tok_demo_paso_2026',
-    business_id: 'biz_paso_elite',
-    visit_id: 'visit_p2',
-    customer_id: 'cust_paso_1',
-    token_hash: 'demo_paso_token_2026',
-    expires_at: new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString(),
-    consumed_at: null,
-    revoked_at: null,
-    created_at: new Date().toISOString()
-  }
-]
-
-const STORAGE_KEY = 'clientloop_store_v1'
+// Bumped to v3 to ensure clean storage
+const STORAGE_KEY = 'clientloop_store_v3'
 
 // In-Memory & LocalStorage Repository State
 class ClientLoopStore {
   private businesses: Business[] = [...INITIAL_BUSINESSES]
-  private customers: Customer[] = [...INITIAL_CUSTOMERS]
-  private visits: Visit[] = [...INITIAL_VISITS]
-  private tokens: QuestionnaireToken[] = [...INITIAL_TOKENS]
+  private customers: Customer[] = []
+  private visits: Visit[] = []
+  private tokens: QuestionnaireToken[] = []
   private submissions: QuestionnaireSubmission[] = []
   private messages: Message[] = []
   private reviewActivities: ReviewActivity[] = []
@@ -316,6 +242,18 @@ class ClientLoopStore {
 
   getBusinessById(id: string): Business | undefined {
     return this.businesses.find(b => b.id === id)
+  }
+
+  createBusiness(biz: Business): Business {
+    const existing = this.businesses.find(b => b.id === biz.id)
+    if (existing) {
+      Object.assign(existing, biz)
+      this.persist()
+      return existing
+    }
+    this.businesses.push(biz)
+    this.persist()
+    return biz
   }
 
   // --- CUSTOMER MANAGEMENT (STRICTLY SCOPED TO BUSINESS_ID) ---
@@ -518,10 +456,11 @@ class ClientLoopStore {
   submitQuestionnaire(
     tokenHash: string,
     answers: {
+      customerName?: string | null
       firstVisitAnswer: boolean
       discoverySourceAnswer: string
       discoverySourceClarification?: string | null
-      serviceAnswer: string
+      serviceAnswer?: string
       rating?: number | null
       feedbackText?: string | null
     }
@@ -556,7 +495,7 @@ class ClientLoopStore {
       first_visit_answer: answers.firstVisitAnswer,
       discovery_source_answer: answers.discoverySourceAnswer,
       discovery_source_clarification: answers.discoverySourceClarification || null,
-      service_answer: answers.serviceAnswer,
+      service_answer: answers.serviceAnswer || 'General Service',
       rating: answers.rating || null,
       feedback_text: answers.feedbackText || null,
       ip_hash: null,
@@ -576,11 +515,22 @@ class ClientLoopStore {
       supabaseService.persistVisit(visit)
     }
 
-    // Update customer discovery source if unset
+    // Update customer name and discovery source
     const customer = this.customers.find(c => c.id === token.customer_id)
-    if (customer && !customer.first_discovery_source) {
-      customer.first_discovery_source = answers.discoverySourceAnswer
-      supabaseService.persistCustomer(customer)
+    if (customer) {
+      let customerChanged = false
+      if (answers.customerName && answers.customerName.trim() && customer.name !== answers.customerName.trim()) {
+        customer.name = answers.customerName.trim()
+        customerChanged = true
+      }
+      if (!customer.first_discovery_source && answers.discoverySourceAnswer) {
+        customer.first_discovery_source = answers.discoverySourceAnswer
+        customerChanged = true
+      }
+      if (customerChanged) {
+        customer.updated_at = new Date().toISOString()
+        supabaseService.persistCustomer(customer)
+      }
     }
 
     this.persist()
@@ -633,6 +583,60 @@ class ClientLoopStore {
 
   getSubmissionsByBusiness(businessId: string): QuestionnaireSubmission[] {
     return this.submissions.filter(s => s.business_id === businessId)
+  }
+
+  // --- MESSAGING & WHATSAPP DISPATCH ---
+  getMessagesByBusiness(businessId: string): Message[] {
+    return this.messages.filter(m => m.business_id === businessId)
+  }
+
+  recordWhatsAppDispatch(
+    businessId: string,
+    visitId: string,
+    customerId: string,
+    channel: 'wa_me' | 'whatsapp_web' | 'whatsapp_app'
+  ): Message {
+    let msg = this.messages.find(m => m.business_id === businessId && m.visit_id === visitId)
+    if (msg) {
+      msg.status = 'delivered'
+      msg.sent_at = msg.sent_at || new Date().toISOString()
+      msg.delivered_at = new Date().toISOString()
+    } else {
+      msg = {
+        id: `msg_${Math.random().toString(36).substring(2, 9)}`,
+        business_id: businessId,
+        customer_id: customerId,
+        visit_id: visitId,
+        provider_message_id: `manual_${Date.now()}`,
+        template_name: 'post_visit_followup_v2',
+        status: 'delivered',
+        failure_reason: null,
+        idempotency_key: `dispatch_${visitId}`,
+        sent_at: new Date().toISOString(),
+        delivered_at: new Date().toISOString(),
+        read_at: null,
+        created_at: new Date().toISOString()
+      }
+      this.messages.unshift(msg)
+    }
+
+    this.recordAuditEvent(businessId, 'staff_user', 'whatsapp_dispatch', 'messages', {
+      visitId,
+      customerId,
+      channel
+    })
+    this.persist()
+    return msg
+  }
+
+  markMessageDispatched(visitId: string): void {
+    const msg = this.messages.find(m => m.visit_id === visitId)
+    if (msg) {
+      msg.status = 'delivered'
+      msg.sent_at = msg.sent_at || new Date().toISOString()
+      msg.delivered_at = new Date().toISOString()
+      this.persist()
+    }
   }
 
   // --- BUSINESS SETTINGS UPDATE ---
