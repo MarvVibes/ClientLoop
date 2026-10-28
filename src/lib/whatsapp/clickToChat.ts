@@ -103,7 +103,12 @@ export function generateWhatsAppClickToChat(params: ClickToChatParams): ClickToC
   }
 
   // Construct secure token questionnaire link
-  const questionnaireUrl = buildQuestionnaireUrl(params.tokenHash)
+  const questionnaireUrl = buildQuestionnaireUrl(params.tokenHash, undefined, {
+    businessId: params.businessId,
+    businessName: params.businessName,
+    customerName: params.customerName || undefined,
+    googleReviewUrl: biz?.google_review_url
+  })
 
   // Construct pre-filled text
   const template = params.customMessageTemplate || DEFAULT_WHATSAPP_INVITATION_TEMPLATE

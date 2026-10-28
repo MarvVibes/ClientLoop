@@ -71,7 +71,13 @@ export const WhatsAppClickToChatModal: React.FC<WhatsAppClickToChatModalProps> =
     : null
 
   // Build URLs only when phone is valid
-  const questionnaireUrl = buildQuestionnaireUrl(token.token_hash)
+  const questionnaireUrl = buildQuestionnaireUrl(token.token_hash, undefined, {
+    businessId: business.id,
+    businessName: business.name,
+    customerName: customer.name || undefined,
+    service: visit.service,
+    googleReviewUrl: business.google_review_url
+  })
   const activeTemplate = templateType === 'direct_review'
     ? DIRECT_GOOGLE_REVIEW_TEMPLATE
     : DEFAULT_WHATSAPP_INVITATION_TEMPLATE

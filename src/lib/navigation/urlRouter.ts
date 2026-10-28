@@ -93,17 +93,102 @@ export function parseRoute(rawUrl?: string | Location): RouteState {
   return { view: 'landing' }
 }
 
+export interface QuestionnaireLinkContext {
+  businessId?: string
+  businessName?: string
+  customerName?: string
+  service?: string
+  googleReviewUrl?: string | null
+}
+
+/**
+ * URL-safe encoding of portable questionnaire context for instant multi-device resolution
+ */
+export function encodeLinkContext(ctx: QuestionnaireLinkContext): string {
+  try {
+    const payload = JSON.stringify({
+      b: ctx.businessId,
+      n: ctx.businessName,
+      c: ctx.customerName,
+      s: ctx.service,
+      r: ctx.googleReviewUrl
+    })
+    if (typeof window !== 'undefined' && typeof window.btoa === 'function') {
+      const bytes = new TextEncoder().encode(payload)
+      let binStr = ''
+      bytes.forEach(byte => (binStr += String.fromCharCode(byte)))
+      return btoa(binStr).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+    }
+    const proc = (globalThis as unknown as { Buffer?: { from: (s: string) => { toString: (e: string) => string } } })
+    if (proc?.Buffer) {
+      return proc.Buffer.from(payload).toString('base64url')
+    }
+    return ''
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * Decodes portable questionnaire context safely
+ */
+export function decodeLinkContext(encoded: string): QuestionnaireLinkContext | null {
+  try {
+    let base64 = encoded.replace(/-/g, '+').replace(/_/g, '/')
+    while (base64.length % 4) {
+      base64 += '='
+    }
+    let jsonStr = ''
+    if (typeof window !== 'undefined' && typeof window.atob === 'function') {
+      const binStr = atob(base64)
+      const bytes = new Uint8Array(binStr.length)
+      for (let i = 0; i < binStr.length; i++) {
+        bytes[i] = binStr.charCodeAt(i)
+      }
+      jsonStr = new TextDecoder().decode(bytes)
+    } else {
+      const proc = (globalThis as unknown as { Buffer?: { from: (s: string, e: string) => { toString: (e: string) => string } } })
+      if (proc?.Buffer) {
+        jsonStr = proc.Buffer.from(base64, 'base64').toString('utf8')
+      }
+    }
+    if (!jsonStr) return null
+    const parsed = JSON.parse(jsonStr)
+    return {
+      businessId: parsed.b,
+      businessName: parsed.n,
+      customerName: parsed.c,
+      service: parsed.s,
+      googleReviewUrl: parsed.r
+    }
+  } catch {
+    return null
+  }
+}
+
 /**
  * Generates the canonical customer questionnaire URL for sharing or embedding.
  */
-export function buildQuestionnaireUrl(tokenHash: string, origin?: string): string {
+export function buildQuestionnaireUrl(
+  tokenHash: string,
+  origin?: string,
+  context?: QuestionnaireLinkContext
+): string {
   const configuredEnvUrl = typeof import.meta !== 'undefined' && (import.meta.env?.VITE_APP_URL || import.meta.env?.VITE_APP_BASE_URL)
     ? String(import.meta.env.VITE_APP_URL || import.meta.env.VITE_APP_BASE_URL).replace(/\/$/, '')
     : ''
   const baseOrigin = origin 
     || configuredEnvUrl
     || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:5173')
-  return `${baseOrigin}/f/${encodeURIComponent(tokenHash)}`
+
+  let url = `${baseOrigin}/f/${encodeURIComponent(tokenHash)}`
+  if (context && context.businessName) {
+    const encoded = encodeLinkContext(context)
+    if (encoded) {
+      url += `?d=${encoded}`
+    }
+  }
+  return url
 }
 
 /**

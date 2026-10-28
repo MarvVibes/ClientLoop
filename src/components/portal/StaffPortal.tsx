@@ -228,12 +228,19 @@ export const StaffPortal: React.FC<StaffPortalProps> = ({
 
       // Directly open WhatsApp with the pre-filled message & feedback form link
       if (token && customer.consent_status !== 'opted_out' && sendQuestionnaire) {
-        const questionnaireLink = buildQuestionnaireUrl(token.token_hash)
+        const questionnaireLink = buildQuestionnaireUrl(token.token_hash, undefined, {
+          businessId: selectedBusinessId,
+          businessName: currentBusiness.name,
+          customerName: customer.name || undefined,
+          service: selectedService,
+          googleReviewUrl: currentBusiness.google_review_url
+        })
         const msgText = buildFollowupMessageText(
           DEFAULT_WHATSAPP_INVITATION_TEMPLATE,
           customer.name || 'there',
           currentBusiness.name,
-          questionnaireLink
+          questionnaireLink,
+          currentBusiness.google_review_url
         )
         const pRes = formatPhoneForWhatsApp(customer.normalized_phone, defaultCountry)
         if (pRes.isValid) {
