@@ -101,8 +101,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Resolve business belonging to user
   const resolveUserBusiness = async (userId: string) => {
     try {
-      // 1. Check store for businesses
-      const allBusinesses = store.getBusinesses()
+      // 1. Sync store from Supabase first so latest businesses are available
+      if (supabase && isSupabaseConfigured()) {
+        try {
+          await store.syncFromSupabase()
+        } catch (e) {
+          console.warn('Initial store sync notice:', e)
+        }
+      }
+
+      // 2. Check store for businesses
+      let allBusinesses = store.getBusinesses()
       const savedBizId = localStorage.getItem(LOCAL_ACTIVE_BIZ_KEY)
 
       if (savedBizId) {
@@ -114,7 +123,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
       }
 
-      // Check remote database if Supabase configured
+      // 3. Check remote database if Supabase configured
       if (supabase && isSupabaseConfigured()) {
         const { data: memberships, error } = await supabase
           .from('business_memberships')
@@ -134,9 +143,38 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             return
           }
         }
+
+        // 4. Fallback: If no explicit membership yet, find existing business created in this database
+        const { data: remoteBusinesses } = await supabase
+          .from('businesses')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(1)
+
+        if (remoteBusinesses && remoteBusinesses.length > 0) {
+          const biz = remoteBusinesses[0] as Business
+          store.createBusiness(biz)
+          setActiveBusiness(biz)
+          localStorage.setItem(LOCAL_ACTIVE_BIZ_KEY, biz.id)
+          setUserRole('owner')
+
+          // Auto-link active membership in background
+          try {
+            await supabase.from('business_memberships').upsert({
+              user_id: userId,
+              business_id: biz.id,
+              role: 'owner',
+              status: 'active'
+            })
+          } catch {
+            // Ignore background membership link error
+          }
+          return
+        }
       }
 
-      // Fallback: If user has created a business in local store
+      // 5. Fallback: If user has created a business in local store
+      allBusinesses = store.getBusinesses()
       if (allBusinesses.length > 0) {
         setActiveBusiness(allBusinesses[0])
         setUserRole('owner')
@@ -146,7 +184,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     } catch (err) {
       console.warn('Failed to resolve user business:', err)
-      setActiveBusiness(null)
+      const fallbackBiz = store.getBusinesses()[0]
+      if (fallbackBiz) {
+        setActiveBusiness(fallbackBiz)
+        setUserRole('owner')
+        localStorage.setItem(LOCAL_ACTIVE_BIZ_KEY, fallbackBiz.id)
+      } else {
+        setActiveBusiness(null)
+      }
     }
   }
 
@@ -167,18 +212,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Sign In
   const signIn = async (email: string, password: string): Promise<{ success: boolean; error?: string }> => {
     try {
+      setIsLoading(true)
       if (supabase && isSupabaseConfigured()) {
         const { data, error } = await supabase.auth.signInWithPassword({
           email: email.trim(),
           password
         })
         if (error) {
+          setIsLoading(false)
           return { success: false, error: error.message }
         }
         if (data.user) {
           setUser(data.user)
           setSession(data.session)
           await resolveUserBusiness(data.user.id)
+          setIsLoading(false)
           return { success: true }
         }
       }
@@ -196,8 +244,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setUser(syntheticUser)
       localStorage.setItem(LOCAL_USER_STORAGE_KEY, JSON.stringify(syntheticUser))
       await resolveUserBusiness(syntheticUser.id)
+      setIsLoading(false)
       return { success: true }
     } catch (err) {
+      setIsLoading(false)
       const msg = err instanceof Error ? err.message : 'Sign-in failed'
       return { success: false, error: msg }
     }

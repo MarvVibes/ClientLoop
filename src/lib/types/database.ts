@@ -36,8 +36,20 @@ export interface Business {
     auto_send_on_visit: boolean
     whatsapp_phone_number_id?: string | null
   }
+  manual_review_count?: number
   created_at: string
   updated_at: string
+}
+
+export interface TeamMember {
+  id: string
+  business_id: string
+  name: string
+  email: string
+  phone?: string | null
+  role: WorkspaceRole
+  status: 'active' | 'invited'
+  created_at: string
 }
 
 export interface BusinessMembership {

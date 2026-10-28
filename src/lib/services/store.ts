@@ -11,7 +11,9 @@ import {
   QuestionnaireSubmission,
   Message,
   ReviewActivity,
-  AuditEvent
+  AuditEvent,
+  TeamMember,
+  WorkspaceRole
 } from '../types/database'
 import { normalizePhoneNumber } from '../phone/normalize'
 import { supabaseService } from '../supabase/service'
@@ -134,6 +136,7 @@ class ClientLoopStore {
   private messages: Message[] = []
   private reviewActivities: ReviewActivity[] = []
   private auditEvents: AuditEvent[] = []
+  private teamMembers: TeamMember[] = []
 
   constructor() {
     this.loadFromStorage()
@@ -211,6 +214,7 @@ class ClientLoopStore {
         if (Array.isArray(parsed.messages)) this.messages = parsed.messages
         if (Array.isArray(parsed.reviewActivities)) this.reviewActivities = parsed.reviewActivities
         if (Array.isArray(parsed.auditEvents)) this.auditEvents = parsed.auditEvents
+        if (Array.isArray(parsed.teamMembers)) this.teamMembers = parsed.teamMembers
       }
     } catch {
       // Ignore storage read error, fallback to initial state
@@ -228,7 +232,8 @@ class ClientLoopStore {
         submissions: this.submissions,
         messages: this.messages,
         reviewActivities: this.reviewActivities,
-        auditEvents: this.auditEvents
+        auditEvents: this.auditEvents,
+        teamMembers: this.teamMembers
       }))
     } catch {
       // Ignore storage write error
@@ -795,6 +800,96 @@ class ClientLoopStore {
 
   getAuditEventsByBusiness(businessId: string): AuditEvent[] {
     return this.auditEvents.filter(a => a.business_id === businessId)
+  }
+
+  // --- TEAM & STAFF MANAGEMENT (RBAC) ---
+  getTeamMembers(businessId: string): TeamMember[] {
+    const members = this.teamMembers.filter(m => m.business_id === businessId)
+    if (members.length === 0) {
+      const biz = this.getBusinessById(businessId)
+      const defaultAdmin: TeamMember = {
+        id: generateUuid(),
+        business_id: businessId,
+        name: 'Workspace Admin',
+        email: 'admin@' + (biz?.slug || 'workspace') + '.com',
+        phone: null,
+        role: 'owner',
+        status: 'active',
+        created_at: biz?.created_at || new Date().toISOString()
+      }
+      this.teamMembers.push(defaultAdmin)
+      this.persist()
+      return [defaultAdmin]
+    }
+    return members
+  }
+
+  addTeamMember(
+    businessId: string,
+    data: { name: string; email: string; phone?: string | null; role: WorkspaceRole }
+  ): TeamMember {
+    const member: TeamMember = {
+      id: generateUuid(),
+      business_id: businessId,
+      name: data.name.trim(),
+      email: data.email.trim().toLowerCase(),
+      phone: data.phone?.trim() || null,
+      role: data.role,
+      status: 'active',
+      created_at: new Date().toISOString()
+    }
+    this.teamMembers.push(member)
+    this.recordAuditEvent(businessId, 'admin_user', 'add_team_member', 'team_members', {
+      memberId: member.id,
+      email: member.email,
+      role: member.role
+    })
+    this.persist()
+    return member
+  }
+
+  updateTeamMemberRole(businessId: string, memberId: string, role: WorkspaceRole): void {
+    const member = this.teamMembers.find(m => m.business_id === businessId && m.id === memberId)
+    if (member) {
+      member.role = role
+      this.recordAuditEvent(businessId, 'admin_user', 'update_team_role', 'team_members', {
+        memberId,
+        newRole: role
+      })
+      this.persist()
+    }
+  }
+
+  removeTeamMember(businessId: string, memberId: string): void {
+    this.teamMembers = this.teamMembers.filter(m => !(m.business_id === businessId && m.id === memberId))
+    this.recordAuditEvent(businessId, 'admin_user', 'remove_team_member', 'team_members', { memberId })
+    this.persist()
+  }
+
+  // --- CONFIRMED GOOGLE REVIEWS MANAGEMENT ---
+  getManualReviewCount(businessId: string): number {
+    const biz = this.getBusinessById(businessId)
+    return biz?.manual_review_count || 0
+  }
+
+  setManualReviewCount(businessId: string, count: number): number {
+    const biz = this.getBusinessById(businessId)
+    if (biz) {
+      biz.manual_review_count = Math.max(0, count)
+      this.persist()
+      return biz.manual_review_count
+    }
+    return count
+  }
+
+  incrementManualReviewCount(businessId: string, delta = 1): number {
+    const biz = this.getBusinessById(businessId)
+    if (biz) {
+      biz.manual_review_count = Math.max(0, (biz.manual_review_count || 0) + delta)
+      this.persist()
+      return biz.manual_review_count
+    }
+    return 0
   }
 }
 

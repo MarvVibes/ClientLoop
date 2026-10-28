@@ -39,7 +39,10 @@ import {
   LogOut,
   FileText,
   Laptop,
-  Compass
+  Compass,
+  Trash2,
+  UserPlus,
+  UserCheck
 } from 'lucide-react'
 import { store, DEFAULT_DISCOVERY_SOURCES, generateUuid } from '../../lib/services/store'
 import { whatsappQueue } from '../../lib/messaging/messageQueue'
@@ -67,6 +70,7 @@ interface StaffPortalProps {
   onSignOut?: () => void
   business?: Business | null
   onOpenOnboarding?: () => void
+  userRole?: WorkspaceRole
 }
 
 export const StaffPortal: React.FC<StaffPortalProps> = ({ 
@@ -74,14 +78,26 @@ export const StaffPortal: React.FC<StaffPortalProps> = ({
   onBackToLanding,
   onSignOut,
   business: initialBusiness,
-  onOpenOnboarding
+  onOpenOnboarding,
+  userRole: initialRole
 }) => {
   const businesses = store.getBusinesses()
   const [selectedBusinessId, setSelectedBusinessId] = useState<string>(
     initialBusiness?.id || businesses[0]?.id || ''
   )
-  const [currentRole, setCurrentRole] = useState<WorkspaceRole>('manager')
+  const [currentRole, setCurrentRole] = useState<WorkspaceRole>(initialRole || 'owner')
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
+
+  // Remote sync & refresh state
+  const [isSyncing, setIsSyncing] = useState(false)
+  const [lastSyncedTime, setLastSyncedTime] = useState<string | null>(null)
+
+  // Team & Staff Access Management state
+  const [newMemberName, setNewMemberName] = useState('')
+  const [newMemberEmail, setNewMemberEmail] = useState('')
+  const [newMemberPhone, setNewMemberPhone] = useState('')
+  const [newMemberRole, setNewMemberRole] = useState<'manager' | 'staff'>('manager')
+  const [teamNotice, setTeamNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
 
   // Business Setup Form State (shown when no business exists)
   const [setupForm, setSetupForm] = useState({
@@ -96,8 +112,8 @@ export const StaffPortal: React.FC<StaffPortalProps> = ({
   const [setupDone, setSetupDone] = useState(false)
   const [setupError, setSetupError] = useState<string | null>(null)
   
-  // Navigation: Overview, Clients, Visits, WhatsApp Reviews, Questionnaire Builder, Executive Reports, Settings
-  const [activeTab, setActiveTab] = useState<'overview' | 'clients' | 'visits' | 'reviews' | 'questionnaire' | 'reports' | 'settings'>('overview')
+  // Navigation: Overview, Clients, Visits, WhatsApp Reviews, Team & Staff, Questionnaire Builder, Executive Reports, Settings
+  const [activeTab, setActiveTab] = useState<'overview' | 'clients' | 'visits' | 'reviews' | 'team' | 'questionnaire' | 'reports' | 'settings'>('overview')
   const [dashboardPreset, setDashboardPreset] = useState<DateRangePreset>('last_30_days')
 
   // WhatsApp Click-to-Chat Modal State
@@ -369,10 +385,88 @@ export const StaffPortal: React.FC<StaffPortalProps> = ({
     setTimeout(() => setSettingsNotice(null), 4000)
   }
 
+  // Handlers for Data Sync, Google Review adjustments, and Team Management
+  const handleSyncData = async () => {
+    setIsSyncing(true)
+    try {
+      await store.syncFromSupabase()
+      setLastSyncedTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }))
+      setRefreshKey(prev => prev + 1)
+    } catch (err) {
+      console.warn('Sync notice:', err)
+    } finally {
+      setIsSyncing(false)
+    }
+  }
+
+  // Periodic polling every 8s to pick up customer feedback & review redirects from phones
+  useEffect(() => {
+    handleSyncData()
+    const interval = setInterval(() => {
+      handleSyncData()
+    }, 8000)
+    return () => clearInterval(interval)
+  }, [selectedBusinessId])
+
+  const handleAdjustReviewCount = (delta: number) => {
+    const current = currentBusiness?.manual_review_count ?? 0
+    const next = Math.max(0, current + delta)
+    store.setManualReviewCount(selectedBusinessId, next)
+    setSettingsNotice({ type: 'success', message: `Confirmed Google reviews updated to ${next}.` })
+    setRefreshKey(prev => prev + 1)
+    setTimeout(() => setSettingsNotice(null), 3000)
+  }
+
+  const handleAddTeamMember = (e: React.FormEvent) => {
+    e.preventDefault()
+    setTeamNotice(null)
+    if (!newMemberName.trim() || !newMemberEmail.trim()) {
+      setTeamNotice({ type: 'error', message: 'Full name and email address are required.' })
+      return
+    }
+    try {
+      store.addTeamMember(selectedBusinessId, {
+        name: newMemberName.trim(),
+        email: newMemberEmail.trim(),
+        phone: newMemberPhone.trim() || null,
+        role: newMemberRole
+      })
+      setNewMemberName('')
+      setNewMemberEmail('')
+      setNewMemberPhone('')
+      setTeamNotice({ type: 'success', message: `Added ${newMemberName.trim()} as ${newMemberRole === 'manager' ? 'Manager' : 'Staff'}.` })
+      setRefreshKey(prev => prev + 1)
+      setTimeout(() => setTeamNotice(null), 4000)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to add team member.'
+      setTeamNotice({ type: 'error', message: msg })
+    }
+  }
+
+  const handleRemoveTeamMember = (memberId: string, memberName: string) => {
+    if (window.confirm(`Are you sure you want to remove ${memberName} from this business workspace?`)) {
+      store.removeTeamMember(selectedBusinessId, memberId)
+      setTeamNotice({ type: 'success', message: `Removed ${memberName} from workspace.` })
+      setRefreshKey(prev => prev + 1)
+      setTimeout(() => setTeamNotice(null), 4000)
+    }
+  }
+
+  const handleToggleMemberRole = (memberId: string, currentMemberRole: WorkspaceRole) => {
+    const nextRole: 'manager' | 'staff' = currentMemberRole === 'manager' ? 'staff' : 'manager'
+    store.updateTeamMemberRole(selectedBusinessId, memberId, nextRole)
+    setTeamNotice({ type: 'success', message: `Updated member role to ${nextRole === 'manager' ? 'Manager' : 'Staff'}.` })
+    setRefreshKey(prev => prev + 1)
+    setTimeout(() => setTeamNotice(null), 4000)
+  }
+
   // Data Selectors with correct tenant-scoped store signatures
   const customers: Customer[] = store.getCustomersByBusiness(selectedBusinessId)
   const visits: Visit[] = store.getVisitsByBusiness(selectedBusinessId)
   const queueMessages: Message[] = whatsappQueue.getMessagesByBusiness(selectedBusinessId)
+  const submissions = store.getSubmissionsByBusiness(selectedBusinessId)
+  const teamMembers = store.getTeamMembers(selectedBusinessId)
+  const reviewActivities = store.getReviewActivities(selectedBusinessId)
   const dashboardMetrics = calculateDashboardMetrics(selectedBusinessId, { preset: dashboardPreset })
   const canExport = hasPermission(currentRole, 'canExportData')
 
@@ -880,6 +974,23 @@ export const StaffPortal: React.FC<StaffPortalProps> = ({
             </button>
 
             <button
+              onClick={() => { setActiveTab('team'); setMobileSidebarOpen(false) }}
+              className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
+                activeTab === 'team'
+                  ? 'bg-blue-50/90 text-blue-600 font-bold'
+                  : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <Users className="w-4 h-4 text-purple-600" />
+                <span>Team &amp; Staff</span>
+              </div>
+              <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-purple-50 text-purple-700">
+                {teamMembers.length}
+              </span>
+            </button>
+
+            <button
               onClick={() => { setActiveTab('settings'); setMobileSidebarOpen(false) }}
               className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
                 activeTab === 'settings'
@@ -964,7 +1075,8 @@ export const StaffPortal: React.FC<StaffPortalProps> = ({
               {activeTab === 'overview' && 'Overview'}
               {activeTab === 'clients' && 'Clients'}
               {activeTab === 'visits' && 'Visits'}
-              {activeTab === 'reviews' && 'WhatsApp'}
+              {activeTab === 'reviews' && 'Google Reviews & WhatsApp'}
+              {activeTab === 'team' && 'Team & Staff Access'}
               {activeTab === 'questionnaire' && 'Survey Builder'}
               {activeTab === 'reports' && 'Reports'}
               {activeTab === 'settings' && 'Settings'}
@@ -980,6 +1092,18 @@ export const StaffPortal: React.FC<StaffPortalProps> = ({
                 Sandbox
               </span>
             )}
+            
+            {/* Sync Remote Telemetry & Feedback Button */}
+            <button
+              onClick={handleSyncData}
+              disabled={isSyncing}
+              className="px-2.5 py-1 rounded-xl text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center gap-1.5 transition-colors cursor-pointer border border-slate-200/80 shadow-xs ml-1"
+              title="Sync latest customer feedback and Google review activity from phones"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin text-blue-600' : 'text-slate-500'}`} />
+              <span className="hidden sm:inline font-bold">{isSyncing ? 'Syncing...' : 'Sync'}</span>
+              {lastSyncedTime && <span className="text-[10px] text-slate-400 font-mono hidden md:inline">({lastSyncedTime})</span>}
+            </button>
             </div>
           </div>
 
@@ -1255,24 +1379,26 @@ export const StaffPortal: React.FC<StaffPortalProps> = ({
                   <p className="text-xs text-slate-500 mt-1 font-medium">Returning for 2+ visits</p>
                 </div>
 
-                {/* 4: Google Review Clicks */}
+                {/* 4: Google Reviews & Redirects */}
                 <div 
                   onClick={() => setActiveTab('reviews')}
                   className="bg-white p-6 rounded-3xl border border-slate-200/90 shadow-xs hover:-translate-y-1 hover:shadow-lg hover:border-amber-300 transition-all duration-200 cursor-pointer group"
                 >
                   <div className="flex items-center justify-between">
                     <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 group-hover:text-amber-600 transition-colors">
-                      Google Review Clicks
+                      Google Reviews
                     </span>
                     <div className="w-9 h-9 rounded-full bg-amber-50 text-amber-500 flex items-center justify-center group-hover:scale-110 group-hover:rotate-6 transition-transform">
-                      <Star className="w-4 h-4" />
+                      <Star className="w-4 h-4 fill-amber-400" />
                     </div>
                   </div>
                   <div className="text-3xl font-black text-amber-500 mt-2 font-mono">
-                    {dashboardMetrics.reviewLinkClicks}
+                    {(currentBusiness.manual_review_count ?? 0) > 0 
+                      ? currentBusiness.manual_review_count 
+                      : dashboardMetrics.reviewLinkClicks}
                   </div>
                   <p className="text-xs text-slate-500 mt-1 font-medium">
-                    {dashboardMetrics.questionnairesCompleted} completed feedback forms
+                    {dashboardMetrics.reviewLinkClicks} redirected to Google ({dashboardMetrics.questionnairesCompleted} feedback)
                   </p>
                 </div>
 
@@ -1916,13 +2042,52 @@ export const StaffPortal: React.FC<StaffPortalProps> = ({
                 </button>
               </div>
 
-              {/* KPI Strip */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div className="bg-white p-5 rounded-3xl border border-slate-200/80 shadow-xs">
-                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Follow-ups Created</span>
-                  <div className="text-3xl font-black text-slate-900 mt-2 font-mono">{queueMessages.length}</div>
-                  <p className="text-xs text-slate-500 font-medium mt-1">Unique single-use feedback links</p>
+              {/* Review Performance KPI Strip */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                {/* 1: Confirmed Google Reviews Tracker with +/- Quick Adjustments */}
+                <div className="bg-white p-5 rounded-3xl border border-slate-200/80 shadow-xs flex flex-col justify-between">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Confirmed Google Reviews</span>
+                    <Star className="w-4 h-4 fill-amber-400 text-amber-500" />
+                  </div>
+                  <div className="flex items-center justify-between mt-2">
+                    <div className="text-3xl font-black text-amber-600 font-mono">
+                      {currentBusiness.manual_review_count ?? 0}
+                    </div>
+                    {currentRole !== 'staff' && (
+                      <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl border border-slate-200/60">
+                        <button
+                          type="button"
+                          onClick={() => handleAdjustReviewCount(-1)}
+                          className="w-7 h-7 rounded-lg bg-white hover:bg-slate-200 text-slate-700 font-black text-xs flex items-center justify-center transition-colors cursor-pointer shadow-xs"
+                          title="Decrease review count"
+                        >
+                          -
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleAdjustReviewCount(1)}
+                          className="px-2 h-7 rounded-lg bg-amber-500 hover:bg-amber-600 text-white font-black text-xs flex items-center gap-1 transition-colors cursor-pointer shadow-xs"
+                          title="Increment when a customer posts a review on Google"
+                        >
+                          +1
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-slate-500 font-medium mt-1">
+                    Verified Google Business Profile count
+                  </p>
                 </div>
+
+                {/* 2: Outbound Review Redirects */}
+                <div className="bg-white p-5 rounded-3xl border border-slate-200/80 shadow-xs">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Redirected to Google</span>
+                  <div className="text-3xl font-black text-blue-600 mt-2 font-mono">{dashboardMetrics.reviewLinkClicks}</div>
+                  <p className="text-xs text-slate-500 font-medium mt-1">Clients forwarded straight to Google page</p>
+                </div>
+
+                {/* 3: Feedback Questionnaires Completed */}
                 <div className="bg-white p-5 rounded-3xl border border-slate-200/80 shadow-xs">
                   <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Feedback Completed</span>
                   <div className="text-3xl font-black text-emerald-600 mt-2 font-mono">{dashboardMetrics.questionnairesCompleted}</div>
@@ -1930,10 +2095,92 @@ export const StaffPortal: React.FC<StaffPortalProps> = ({
                     {dashboardMetrics.questionnairesSent > 0 ? `${dashboardMetrics.questionnaireCompletionRate}% response rate` : 'Awaiting client submissions'}
                   </p>
                 </div>
+
+                {/* 4: Follow-up Invitations Created */}
                 <div className="bg-white p-5 rounded-3xl border border-slate-200/80 shadow-xs">
-                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Google Review Clicks</span>
-                  <div className="text-3xl font-black text-amber-500 mt-2 font-mono">{dashboardMetrics.reviewLinkClicks}</div>
-                  <p className="text-xs text-slate-500 font-medium mt-1">Clients directed to your Google page</p>
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Follow-ups Created</span>
+                  <div className="text-3xl font-black text-slate-900 mt-2 font-mono">{queueMessages.length}</div>
+                  <p className="text-xs text-slate-500 font-medium mt-1">Unique single-use feedback links</p>
+                </div>
+              </div>
+
+              {/* Customer Feedback & Google Review Activity Table */}
+              <div className="bg-white rounded-3xl border border-slate-200/80 shadow-xs overflow-hidden">
+                <div className="p-5 border-b border-slate-100 flex items-center justify-between">
+                  <div>
+                    <h3 className="font-bold text-sm text-slate-900 flex items-center gap-2">
+                      <Star className="w-4 h-4 fill-amber-400 text-amber-500" />
+                      Customer Feedback &amp; Google Review Activity
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Submissions from clients redirected to drop a Google Review
+                    </p>
+                  </div>
+                  <span className="text-xs font-mono text-slate-500 font-bold px-2.5 py-1 rounded-full bg-slate-100">
+                    {submissions.length} Submissions
+                  </span>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider border-b border-slate-200/80">
+                      <tr>
+                        <th className="py-3.5 px-5">Client</th>
+                        <th className="py-3.5 px-5">Service</th>
+                        <th className="py-3.5 px-5">Visit Type</th>
+                        <th className="py-3.5 px-5">Discovery Source</th>
+                        <th className="py-3.5 px-5">Google Review Status</th>
+                        <th className="py-3.5 px-5 text-right">Submitted At</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {submissions.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="py-12 text-center text-slate-400 italic">
+                            No customer feedback received yet. Log a client visit and send a WhatsApp link to start collecting reviews.
+                          </td>
+                        </tr>
+                      ) : (
+                        submissions.map((sub) => {
+                          const cust = store.findCustomerById(selectedBusinessId, sub.customer_id)
+                          return (
+                            <tr key={sub.id} className="hover:bg-slate-50/80 transition-colors">
+                              <td className="py-4 px-5">
+                                <p className="font-bold text-slate-900 text-xs">{cust?.name || 'Client'}</p>
+                                <p className="text-[11px] font-mono text-slate-500">{cust?.normalized_phone || '—'}</p>
+                              </td>
+                              <td className="py-4 px-5 font-medium text-slate-700">
+                                {sub.service_answer || 'General Service'}
+                              </td>
+                              <td className="py-4 px-5">
+                                {sub.first_visit_answer ? (
+                                  <span className="px-2.5 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200 text-[10px] font-bold">
+                                    First-Timer
+                                  </span>
+                                ) : (
+                                  <span className="px-2.5 py-1 rounded-full bg-slate-100 text-slate-700 text-[10px] font-bold">
+                                    Returning Client
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-4 px-5 text-slate-600 font-medium">
+                                {sub.discovery_source_answer || '—'}
+                              </td>
+                              <td className="py-4 px-5">
+                                <span className="px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold text-[10px] inline-flex items-center gap-1.5">
+                                  <Star className="w-3 h-3 fill-amber-400 text-amber-500" />
+                                  <span>Redirected to Google Review</span>
+                                </span>
+                              </td>
+                              <td className="py-4 px-5 text-right font-mono text-xs text-slate-500">
+                                {new Date(sub.submitted_at).toLocaleDateString()} {new Date(sub.submitted_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                              </td>
+                            </tr>
+                          )
+                        })
+                      )}
+                    </tbody>
+                  </table>
                 </div>
               </div>
 
@@ -2014,6 +2261,334 @@ export const StaffPortal: React.FC<StaffPortalProps> = ({
                       )}
                     </tbody>
                   </table>
+                </div>
+              </div>
+
+            </div>
+          )}
+
+          {/* =========================================================================
+              VIEW: TEAM & STAFF ACCESS MANAGEMENT
+             ========================================================================= */}
+          {activeTab === 'team' && (
+            <div className="space-y-6 animate-in fade-in duration-150">
+              
+              {/* Team Banner */}
+              <div className="p-6 bg-gradient-to-r from-purple-950 via-slate-900 to-indigo-950 text-white rounded-3xl border border-purple-800/40 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 rounded-2xl bg-purple-600/20 border border-purple-500/30 flex items-center justify-center text-purple-400 shrink-0">
+                    <Users className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-base text-white">Team &amp; Staff Access Management</span>
+                      <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                        RBAC ACCESS
+                      </span>
+                    </div>
+                    <p className="text-xs text-purple-200/80 mt-1 max-w-xl">
+                      Add managers to configure settings and review performance, or staff to log visits and send WhatsApp review links.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 self-start sm:self-auto bg-purple-900/40 border border-purple-700/50 px-3.5 py-2 rounded-2xl text-xs">
+                  <ShieldCheck className="w-4 h-4 text-purple-300" />
+                  <span>Your Role: <strong className="capitalize text-white">{currentRole}</strong></span>
+                </div>
+              </div>
+
+              {teamNotice && (
+                <div className={`p-4 rounded-2xl border text-xs font-semibold flex items-center justify-between ${
+                  teamNotice.type === 'success'
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                    : 'bg-rose-50 border-rose-200 text-rose-800'
+                }`}>
+                  <span>{teamNotice.message}</span>
+                  <button onClick={() => setTeamNotice(null)} className="font-bold ml-2 cursor-pointer">×</button>
+                </div>
+              )}
+
+              {/* Two Column: Add Team Member Form (5 cols) + Active Team Members List (7 cols) */}
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+                
+                {/* Left: Add Team Member Form */}
+                <div className="lg:col-span-5 bg-white p-6 sm:p-7 rounded-3xl border border-slate-200/90 shadow-xs space-y-4">
+                  <div className="border-b border-slate-100 pb-3">
+                    <h3 className="font-bold text-sm text-slate-900 flex items-center gap-2">
+                      <UserPlus className="w-4 h-4 text-purple-600" />
+                      Add Someone to Manage the System
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Grant someone access to manage or operate this business
+                    </p>
+                  </div>
+
+                  <form onSubmit={handleAddTeamMember} className="space-y-4">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                        Full Name *
+                      </label>
+                      <input
+                        type="text"
+                        value={newMemberName}
+                        onChange={(e) => setNewMemberName(e.target.value)}
+                        placeholder="e.g. Alex Adebayo"
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-xs text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        required
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                        Email Address *
+                      </label>
+                      <input
+                        type="email"
+                        value={newMemberEmail}
+                        onChange={(e) => setNewMemberEmail(e.target.value)}
+                        placeholder="alex@business.com"
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-xs text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        required
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                        Phone Number (WhatsApp)
+                      </label>
+                      <input
+                        type="tel"
+                        value={newMemberPhone}
+                        onChange={(e) => setNewMemberPhone(e.target.value)}
+                        placeholder="+234..."
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-xs text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                        Role &amp; System Permissions *
+                      </label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <label className={`p-3 rounded-2xl border cursor-pointer transition-all ${
+                          newMemberRole === 'manager'
+                            ? 'bg-purple-50 border-purple-300 ring-2 ring-purple-500/20'
+                            : 'bg-slate-50 border-slate-200 hover:bg-slate-100'
+                        }`}>
+                          <input
+                            type="radio"
+                            name="memberRole"
+                            value="manager"
+                            checked={newMemberRole === 'manager'}
+                            onChange={() => setNewMemberRole('manager')}
+                            className="sr-only"
+                          />
+                          <div className="font-bold text-xs text-slate-900 flex items-center justify-between">
+                            <span>Manager</span>
+                            {newMemberRole === 'manager' && <Check className="w-3.5 h-3.5 text-purple-600" />}
+                          </div>
+                          <p className="text-[10px] text-slate-500 mt-1 leading-snug">
+                            Full management: Team, Google Review link, exports &amp; reports
+                          </p>
+                        </label>
+
+                        <label className={`p-3 rounded-2xl border cursor-pointer transition-all ${
+                          newMemberRole === 'staff'
+                            ? 'bg-purple-50 border-purple-300 ring-2 ring-purple-500/20'
+                            : 'bg-slate-50 border-slate-200 hover:bg-slate-100'
+                        }`}>
+                          <input
+                            type="radio"
+                            name="memberRole"
+                            value="staff"
+                            checked={newMemberRole === 'staff'}
+                            onChange={() => setNewMemberRole('staff')}
+                            className="sr-only"
+                          />
+                          <div className="font-bold text-xs text-slate-900 flex items-center justify-between">
+                            <span>Staff</span>
+                            {newMemberRole === 'staff' && <Check className="w-3.5 h-3.5 text-purple-600" />}
+                          </div>
+                          <p className="text-[10px] text-slate-500 mt-1 leading-snug">
+                            Front desk: Log visits &amp; send WhatsApp review links
+                          </p>
+                        </label>
+                      </div>
+                    </div>
+
+                    <button
+                      type="submit"
+                      disabled={currentRole === 'staff'}
+                      className={`w-full py-3 px-4 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-2 cursor-pointer shadow-sm ${
+                        currentRole !== 'staff'
+                          ? 'bg-purple-600 hover:bg-purple-700 text-white'
+                          : 'bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200'
+                      }`}
+                    >
+                      <UserPlus className="w-4 h-4" />
+                      <span>Add Team Member</span>
+                    </button>
+                    {currentRole === 'staff' && (
+                      <p className="text-[11px] text-amber-700 text-center font-medium">
+                        Only owners and managers can add team members.
+                      </p>
+                    )}
+                  </form>
+                </div>
+
+                {/* Right: Active Team Members List */}
+                <div className="lg:col-span-7 bg-white rounded-3xl border border-slate-200/90 shadow-xs overflow-hidden">
+                  <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+                    <div>
+                      <h3 className="font-bold text-sm text-slate-900">Active Workspace Members</h3>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        People authorized to access and operate {currentBusiness.name}
+                      </p>
+                    </div>
+                    <span className="text-xs font-mono font-bold px-2.5 py-1 rounded-full bg-purple-50 text-purple-700">
+                      {1 + teamMembers.length} Accounts
+                    </span>
+                  </div>
+
+                  <div className="divide-y divide-slate-100 text-xs">
+                    {/* Primary Owner */}
+                    <div className="p-5 flex items-center justify-between hover:bg-slate-50/50 transition-colors">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-2xl bg-amber-100 text-amber-800 font-bold flex items-center justify-center text-xs border border-amber-200 shrink-0">
+                          <Crown className="w-5 h-5 text-amber-600" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-slate-900 text-xs">{currentBusiness.name} Owner</span>
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                              Primary Owner
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-500 font-mono mt-0.5">Primary Administrator Account</p>
+                        </div>
+                      </div>
+                      <span className="px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold text-[10px]">
+                        Active
+                      </span>
+                    </div>
+
+                    {/* Team Members */}
+                    {teamMembers.length === 0 ? (
+                      <div className="p-8 text-center text-slate-400 italic">
+                        No additional team members added yet. Add a manager or staff member using the form on the left.
+                      </div>
+                    ) : (
+                      teamMembers.map((member) => (
+                        <div key={member.id} className="p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-slate-50/50 transition-colors">
+                          <div className="flex items-center gap-3">
+                            <div className={`w-10 h-10 rounded-2xl font-bold flex items-center justify-center text-xs shrink-0 ${
+                              member.role === 'manager'
+                                ? 'bg-blue-50 text-blue-700 border border-blue-200'
+                                : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                            }`}>
+                              {member.name.charAt(0).toUpperCase()}
+                            </div>
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <span className="font-bold text-slate-900 text-xs">{member.name}</span>
+                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                                  member.role === 'manager'
+                                    ? 'bg-blue-50 text-blue-700 border-blue-200'
+                                    : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                }`}>
+                                  {member.role === 'manager' ? 'Manager' : 'Staff'}
+                                </span>
+                              </div>
+                              <p className="text-[11px] text-slate-500 font-mono mt-0.5">
+                                {member.email} {member.phone ? `• ${member.phone}` : ''}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 self-end sm:self-auto">
+                            {currentRole !== 'staff' && (
+                              <button
+                                type="button"
+                                onClick={() => handleToggleMemberRole(member.id, member.role)}
+                                className="px-2.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-[11px] transition-colors cursor-pointer"
+                                title="Toggle role between Manager and Staff"
+                              >
+                                Make {member.role === 'manager' ? 'Staff' : 'Manager'}
+                              </button>
+                            )}
+
+                            {currentRole !== 'staff' && (
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveTeamMember(member.id, member.name)}
+                                className="p-1.5 rounded-xl hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
+                                title="Remove team member"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+
+              </div>
+
+              {/* Role Permissions Matrix Card */}
+              <div className="bg-white p-6 sm:p-7 rounded-3xl border border-slate-200/90 shadow-xs space-y-4">
+                <div className="border-b border-slate-100 pb-3 flex items-center justify-between">
+                  <h4 className="font-bold text-sm text-slate-900 flex items-center gap-2">
+                    <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                    Role Permissions Overview
+                  </h4>
+                  <span className="text-xs text-slate-400">Security &amp; Boundary Rules</span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+                  <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-2">
+                    <div className="font-bold text-slate-900 flex items-center gap-1.5">
+                      <Crown className="w-4 h-4 text-amber-500" />
+                      <span>Owner</span>
+                    </div>
+                    <ul className="text-slate-600 space-y-1 text-[11px] leading-relaxed">
+                      <li>✓ Complete workspace ownership</li>
+                      <li>✓ Add, manage, and remove team members</li>
+                      <li>✓ Configure Google Review links</li>
+                      <li>✓ Export CSV records &amp; client data</li>
+                      <li>✓ View executive and financial reports</li>
+                    </ul>
+                  </div>
+
+                  <div className="p-4 bg-blue-50/50 rounded-2xl border border-blue-200/60 space-y-2">
+                    <div className="font-bold text-blue-900 flex items-center gap-1.5">
+                      <Sliders className="w-4 h-4 text-blue-600" />
+                      <span>Manager</span>
+                    </div>
+                    <ul className="text-slate-600 space-y-1 text-[11px] leading-relaxed">
+                      <li>✓ Manage team members &amp; staff</li>
+                      <li>✓ Configure Google Review URL &amp; surveys</li>
+                      <li>✓ Export client directory &amp; visit CSV</li>
+                      <li>✓ Access executive reports &amp; retention rates</li>
+                      <li>✓ Log visits &amp; dispatch WhatsApp follow-ups</li>
+                    </ul>
+                  </div>
+
+                  <div className="p-4 bg-emerald-50/50 rounded-2xl border border-emerald-200/60 space-y-2">
+                    <div className="font-bold text-emerald-900 flex items-center gap-1.5">
+                      <MessageCircle className="w-4 h-4 text-emerald-600" />
+                      <span>Staff</span>
+                    </div>
+                    <ul className="text-slate-600 space-y-1 text-[11px] leading-relaxed">
+                      <li>✓ Log client visits &amp; record service received</li>
+                      <li>✓ Dispatch WhatsApp feedback &amp; review links</li>
+                      <li>✓ Search and view client directory</li>
+                      <li>✗ Cannot modify Google Review settings</li>
+                      <li>✗ Cannot export bulk data or delete members</li>
+                    </ul>
+                  </div>
                 </div>
               </div>
 
@@ -2249,6 +2824,28 @@ export const StaffPortal: React.FC<StaffPortalProps> = ({
                         Clients can reply STOP on WhatsApp to cease all communications immediately.
                       </span>
                     </div>
+                  </div>
+                </div>
+
+                {/* 4. Team & Staff Access Management Shortcut */}
+                <div className="bg-white p-7 rounded-3xl border border-slate-200/80 shadow-xs space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-2xl bg-purple-50 text-purple-600 flex items-center justify-center shrink-0">
+                        <Users className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h4 className="text-sm font-bold text-slate-900">Team &amp; Staff Access</h4>
+                        <p className="text-xs text-slate-500">Manage managers and staff authorized for this business</p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('team')}
+                      className="px-3.5 py-1.5 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-700 font-bold text-xs transition-colors cursor-pointer"
+                    >
+                      Manage Team ({1 + teamMembers.length}) →
+                    </button>
                   </div>
                 </div>
 

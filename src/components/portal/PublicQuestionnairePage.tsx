@@ -274,6 +274,11 @@ export const PublicQuestionnairePage: React.FC<PublicQuestionnairePageProps> = (
   // Automatic redirect countdown after form submission
   useEffect(() => {
     if (submitted && effectiveReviewUrl) {
+      // Immediately track the review redirect event so it reflects on the dashboard
+      if (token) {
+        store.recordReviewClick(token.business_id, token.customer_id, token.visit_id)
+        supabaseService.recordPublicReviewClick(tokenHash)
+      }
       setRedirectCountdown(3)
       const interval = setInterval(() => {
         setRedirectCountdown((prev) => {
@@ -291,7 +296,7 @@ export const PublicQuestionnairePage: React.FC<PublicQuestionnairePageProps> = (
       }, 1000)
       return () => clearInterval(interval)
     }
-  }, [submitted, effectiveReviewUrl])
+  }, [submitted, effectiveReviewUrl, token, tokenHash])
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()

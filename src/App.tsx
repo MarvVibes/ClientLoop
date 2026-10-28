@@ -27,7 +27,7 @@ import { parseRoute, updateBrowserUrl, AppView } from './lib/navigation/urlRoute
 import { Lock, ArrowRight, ShieldCheck, ArrowLeft, Building2 } from 'lucide-react'
 
 function AppContent() {
-  const { user, isAuthenticated, hasCompletedOnboarding, activeBusiness, signOut, refreshActiveBusiness } = useAuth()
+  const { user, isAuthenticated, hasCompletedOnboarding, activeBusiness, userRole, signOut, refreshActiveBusiness, isLoading } = useAuth()
 
   // Navigation / View state - Initialized from URL directly (?token=..., /f/..., /portal)
   const [initialRoute] = useState(() => parseRoute())
@@ -120,6 +120,16 @@ function AppContent() {
 
   // 2. View: Staff Operations Portal (Protected Route)
   if (currentView === 'staff_portal') {
+    // Show spinner while checking session and loading workspace business
+    if (isLoading) {
+      return (
+        <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center text-white p-6">
+          <div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4" />
+          <p className="text-sm font-semibold text-slate-300">Loading your workspace...</p>
+        </div>
+      )
+    }
+
     // A. Unauthenticated Gate
     if (!isAuthenticated) {
       return (
@@ -195,6 +205,7 @@ function AppContent() {
     return (
       <StaffPortal 
         business={activeBusiness}
+        userRole={userRole}
         onOpenCustomerQuestionnaire={handleOpenCustomerQuestionnaire}
         onBackToLanding={handleBackToLanding}
         onSignOut={async () => {
