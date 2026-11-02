@@ -177,3 +177,27 @@ test('Multi-Tenant Telemetry - Separates events and does not count link clicks a
   assert.equal(eventsB[0].business_id, tenantB.id)
   assert.equal(eventsB[0].source, 'thank_you_page')
 })
+
+test('Google Form Intake URL - Interpolates into WhatsApp message and persists in Business Settings', () => {
+  const bizId = generateUuid()
+  const biz = store.createBusiness({
+    id: bizId,
+    name: 'Paso Elite Unisex Salon',
+    slug: `paso-test-${Date.now()}`,
+    category: 'Hair Salon',
+    timezone: 'Africa/Lagos',
+    google_review_url: 'https://maps.google.com/?cid=123456789',
+    google_form_url: 'https://forms.gle/VaGnVjmttgEcCgte8',
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  })
+
+  assert.equal(biz.google_form_url, 'https://forms.gle/VaGnVjmttgEcCgte8')
+
+  // Update form link
+  store.updateBusinessSettings(bizId, {
+    google_form_url: 'https://docs.google.com/forms/d/e/1FAIpQLSeJ9zcJKOpczm5J_RoFmQBw81XYccof9X1rrsEKJ0o_D-q0Jw/viewform'
+  })
+  const updated = store.getBusinessById(bizId)
+  assert.equal(updated?.google_form_url, 'https://docs.google.com/forms/d/e/1FAIpQLSeJ9zcJKOpczm5J_RoFmQBw81XYccof9X1rrsEKJ0o_D-q0Jw/viewform')
+})

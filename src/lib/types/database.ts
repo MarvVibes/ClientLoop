@@ -19,6 +19,7 @@ export interface Business {
   timezone: string
   address: string | null
   google_review_url: string | null
+  google_form_url?: string | null
   branding: {
     primary_color?: string
     logo_url?: string | null

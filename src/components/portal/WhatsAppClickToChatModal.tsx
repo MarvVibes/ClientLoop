@@ -82,11 +82,13 @@ export const WhatsAppClickToChatModal: React.FC<WhatsAppClickToChatModalProps> =
     ? DIRECT_GOOGLE_REVIEW_TEMPLATE
     : DEFAULT_WHATSAPP_INVITATION_TEMPLATE
 
+  const effectiveFormUrl = business.google_form_url?.trim() || questionnaireUrl
+
   const prefilledText = buildFollowupMessageText(
     activeTemplate,
     customer.name || 'there',
     business.name,
-    questionnaireUrl,
+    effectiveFormUrl,
     business.google_review_url
   )
   const encodedText = encodeURIComponent(prefilledText)

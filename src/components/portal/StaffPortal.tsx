@@ -160,6 +160,7 @@ export const StaffPortal: React.FC<StaffPortalProps> = ({
   // Export & Settings Notices
   const [exportNotice, setExportNotice] = useState<string | null>(null)
   const [googleReviewUrlInput, setGoogleReviewUrlInput] = useState<string>('')
+  const [googleFormUrlInput, setGoogleFormUrlInput] = useState<string>('')
   const [settingsNotice, setSettingsNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
   const [copiedTokenUrl, setCopiedTokenUrl] = useState(false)
 
@@ -179,6 +180,7 @@ export const StaffPortal: React.FC<StaffPortalProps> = ({
       setSelectedService(currentBusiness.services[0].name)
     }
     setGoogleReviewUrlInput(currentBusiness?.google_review_url || '')
+    setGoogleFormUrlInput(currentBusiness?.google_form_url || '')
     setPhoneInput('')
     setCustomerName('')
     setMatchedCustomer(null)
@@ -244,7 +246,7 @@ export const StaffPortal: React.FC<StaffPortalProps> = ({
 
       // Directly open WhatsApp with the pre-filled message & feedback form link
       if (token && customer.consent_status !== 'opted_out' && sendQuestionnaire) {
-        const questionnaireLink = buildQuestionnaireUrl(token.token_hash, undefined, {
+        const questionnaireLink = currentBusiness?.google_form_url?.trim() || buildQuestionnaireUrl(token.token_hash, undefined, {
           businessId: selectedBusinessId,
           businessName: currentBusiness.name,
           customerName: customer.name || undefined,
@@ -354,6 +356,46 @@ export const StaffPortal: React.FC<StaffPortalProps> = ({
     if (currentBusiness.google_review_url) {
       navigator.clipboard.writeText(currentBusiness.google_review_url)
       setSettingsNotice({ type: 'success', message: 'Google review URL copied to clipboard!' })
+      setTimeout(() => setSettingsNotice(null), 3000)
+    }
+  }
+
+  // Google Intake Form Handlers
+  const handleSaveGoogleFormUrl = (e: React.FormEvent) => {
+    e.preventDefault()
+    try {
+      const url = googleFormUrlInput.trim()
+      store.updateBusinessSettings(selectedBusinessId, {
+        google_form_url: url || null
+      })
+      setSettingsNotice({ type: 'success', message: 'Customer intake Google Form link saved successfully!' })
+      setRefreshKey(prev => prev + 1)
+      setTimeout(() => setSettingsNotice(null), 4000)
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to update Google Form URL'
+      setSettingsNotice({ type: 'error', message: msg })
+      setTimeout(() => setSettingsNotice(null), 4000)
+    }
+  }
+
+  const handleRemoveGoogleFormUrl = () => {
+    try {
+      store.updateBusinessSettings(selectedBusinessId, { google_form_url: null })
+      setGoogleFormUrlInput('')
+      setSettingsNotice({ type: 'success', message: 'Google Form link removed.' })
+      setRefreshKey(prev => prev + 1)
+      setTimeout(() => setSettingsNotice(null), 4000)
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to remove Google Form link'
+      setSettingsNotice({ type: 'error', message: msg })
+      setTimeout(() => setSettingsNotice(null), 4000)
+    }
+  }
+
+  const handleCopyGoogleFormUrl = () => {
+    if (currentBusiness.google_form_url) {
+      navigator.clipboard.writeText(currentBusiness.google_form_url)
+      setSettingsNotice({ type: 'success', message: 'Customer intake Google Form link copied to clipboard!' })
       setTimeout(() => setSettingsNotice(null), 3000)
     }
   }
@@ -2854,7 +2896,68 @@ export const StaffPortal: React.FC<StaffPortalProps> = ({
                     </div>
                   )}
 
-                  {/* Tracking Redirect URL */}
+                  {/* 1. Customer Intake Google Form URL */}
+                  <form onSubmit={handleSaveGoogleFormUrl} className="space-y-2">
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                      Existing Customer Intake Google Form URL:
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="url"
+                        value={googleFormUrlInput}
+                        onChange={(e) => setGoogleFormUrlInput(e.target.value)}
+                        placeholder="https://forms.gle/... or https://docs.google.com/forms/..."
+                        className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-xs text-slate-900 font-mono focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      />
+                      <button
+                        type="submit"
+                        disabled={currentRole === 'staff'}
+                        className={`px-4 py-2.5 rounded-xl font-bold text-xs transition-colors cursor-pointer ${
+                          currentRole !== 'staff'
+                            ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs'
+                            : 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'
+                        }`}
+                      >
+                        Save Form
+                      </button>
+                      {currentBusiness.google_form_url && (
+                        <>
+                          <a
+                            href={currentBusiness.google_form_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="px-3.5 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs flex items-center gap-1 transition-colors"
+                            title="Open Google Form in New Tab"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" />
+                          </a>
+                          <button
+                            type="button"
+                            onClick={handleCopyGoogleFormUrl}
+                            className="px-3.5 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs flex items-center gap-1 transition-colors cursor-pointer"
+                            title="Copy Form Link"
+                          >
+                            <Copy className="w-3.5 h-3.5" />
+                          </button>
+                          {currentRole !== 'staff' && (
+                            <button
+                              type="button"
+                              onClick={handleRemoveGoogleFormUrl}
+                              className="px-2.5 py-2.5 rounded-xl bg-rose-50 text-rose-600 hover:bg-rose-100 text-xs font-bold transition-colors cursor-pointer"
+                              title="Remove Google Form link"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-slate-500">
+                      When configured, WhatsApp follow-up messages automatically deliver this Google Form link so customers can complete intake directly on their phones.
+                    </p>
+                  </form>
+
+                  {/* 2. Tracking Redirect URL */}
                   <div className="space-y-2">
                     <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
                       Your Business&apos;s Tracking Redirect URL:

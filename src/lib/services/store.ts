@@ -56,6 +56,7 @@ export const TEST_FIXTURE_BUSINESSES: Business[] = [
     timezone: 'Africa/Lagos',
     address: 'No. 6 Itu Road, Uyo, Akwa Ibom, Nigeria',
     google_review_url: 'https://maps.google.com/?cid=sample_paso_elite',
+    google_form_url: 'https://forms.gle/VaGnVjmttgEcCgte8',
     branding: {
       primary_color: '#2563EB',
       logo_url: null
