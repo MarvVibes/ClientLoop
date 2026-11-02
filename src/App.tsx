@@ -14,6 +14,7 @@ import { FinalCTA } from './components/FinalCTA'
 import { Footer } from './components/Footer'
 import { StaffPortal } from './components/portal/StaffPortal'
 import { PublicQuestionnairePage } from './components/portal/PublicQuestionnairePage'
+import { ReviewRedirectPage } from './components/portal/ReviewRedirectPage'
 import { AuthModal } from './components/auth/AuthModal'
 import { BusinessOnboarding } from './components/onboarding/BusinessOnboarding'
 import { AuthProvider, useAuth } from './lib/auth/AuthContext'
@@ -29,10 +30,16 @@ import { Lock, ArrowRight, ShieldCheck, ArrowLeft, Building2 } from 'lucide-reac
 function AppContent() {
   const { user, isAuthenticated, hasCompletedOnboarding, activeBusiness, userRole, signOut, refreshActiveBusiness, isLoading } = useAuth()
 
-  // Navigation / View state - Initialized from URL directly (?token=..., /f/..., /portal)
+  // Navigation / View state - Initialized from URL directly (?token=..., /f/..., /portal, /r/...)
   const [initialRoute] = useState(() => parseRoute())
   const [currentView, setCurrentView] = useState<AppView>(initialRoute.view)
   const [activeQuestionnaireToken, setActiveQuestionnaireToken] = useState<string>(initialRoute.token || '')
+  const [redirectParams, setRedirectParams] = useState({
+    businessIdentifier: initialRoute.businessIdentifier || '',
+    customerId: initialRoute.customerId,
+    visitId: initialRoute.visitId,
+    source: initialRoute.source
+  })
   const [isCreatingNewBusiness, setIsCreatingNewBusiness] = useState(false)
 
   // Sync with browser back/forward and hash changes
@@ -42,6 +49,14 @@ function AppContent() {
       setCurrentView(route.view)
       if (route.token) {
         setActiveQuestionnaireToken(route.token)
+      }
+      if (route.businessIdentifier) {
+        setRedirectParams({
+          businessIdentifier: route.businessIdentifier,
+          customerId: route.customerId,
+          visitId: route.visitId,
+          source: route.source
+        })
       }
     }
 
@@ -108,7 +123,20 @@ function AppContent() {
     }
   }
 
-  // 1. View: Public Mobile Questionnaire
+  // 1. View: Tenant Review Tracking & Redirect Endpoint (/r/:identifier)
+  if (currentView === 'review_redirect') {
+    return (
+      <ReviewRedirectPage
+        identifier={redirectParams.businessIdentifier || 'paso-elite-salon'}
+        customerId={redirectParams.customerId}
+        visitId={redirectParams.visitId}
+        source={redirectParams.source || 'google_form'}
+        onClose={handleBackToLanding}
+      />
+    )
+  }
+
+  // 2. View: Public Mobile Questionnaire
   if (currentView === 'questionnaire') {
     return (
       <PublicQuestionnairePage 

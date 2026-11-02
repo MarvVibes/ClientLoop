@@ -393,6 +393,99 @@ class SupabaseService {
       // Non-blocking telemetry notice
     }
   }
+
+  /**
+   * Fetches public business review information by ID or slug. Safe for unauthenticated customers.
+   */
+  async fetchBusinessForReviewRedirect(identifier: string): Promise<PublicBusinessReviewInfo | null> {
+    if (!supabase || !isSupabaseConfigured()) return null
+    try {
+      // 1. Try security-definer RPC
+      const { data, error } = await supabase.rpc('get_public_business_review_info', {
+        p_business_identifier: identifier
+      })
+      if (!error && data && typeof data === 'object') {
+        const res = data as PublicBusinessReviewInfo
+        if (res.valid) return res
+        if (res.error) return { valid: false, error: res.error } as PublicBusinessReviewInfo
+      }
+
+      // 2. Direct fallback if table readable
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(identifier)
+      let query = supabase.from('businesses').select('id, name, slug, address, google_review_url')
+      if (isUuid) {
+        query = query.eq('id', identifier)
+      } else {
+        query = query.eq('slug', identifier)
+      }
+      const { data: bizData } = await query.maybeSingle()
+      if (bizData) {
+        return {
+          valid: true,
+          business_id: bizData.id,
+          business_name: bizData.name,
+          business_slug: bizData.slug,
+          business_address: bizData.address,
+          google_review_url: bizData.google_review_url
+        }
+      }
+      return null
+    } catch (err) {
+      console.warn('Error fetching business for review redirect:', err)
+      return null
+    }
+  }
+
+  /**
+   * Records outbound public Google Review link click telemetry by business identifier
+   */
+  async recordPublicReviewClickByBusiness(
+    businessIdentifier: string,
+    customerId?: string | null,
+    visitId?: string | null,
+    source: string = 'google_form'
+  ): Promise<void> {
+    if (!supabase || !isSupabaseConfigured()) return
+    try {
+      // 1. Try security-definer RPC
+      const { error } = await supabase.rpc('record_public_business_review_click', {
+        p_business_identifier: businessIdentifier,
+        p_customer_id: customerId || null,
+        p_visit_id: visitId || null,
+        p_source: source || 'google_form'
+      })
+      if (!error) return
+
+      // 2. Fallback direct insert if RPC not yet deployed
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(businessIdentifier)
+      let targetBizId = businessIdentifier
+      if (!isUuid) {
+        const { data: b } = await supabase.from('businesses').select('id').eq('slug', businessIdentifier).maybeSingle()
+        if (b) targetBizId = b.id
+      }
+      await supabase.from('review_activity').insert({
+        business_id: targetBizId,
+        customer_id: customerId || null,
+        visit_id: visitId || null,
+        event_type: 'link_clicked',
+        source: source || 'google_form',
+        verification_level: 'unverified_click',
+        created_at: new Date().toISOString()
+      })
+    } catch {
+      // Non-blocking telemetry notice
+    }
+  }
+}
+
+export interface PublicBusinessReviewInfo {
+  valid: boolean
+  business_id: string
+  business_name: string
+  business_slug?: string
+  business_address?: string | null
+  google_review_url: string | null
+  error?: string
 }
 
 export interface PublicQuestionnaireContext {

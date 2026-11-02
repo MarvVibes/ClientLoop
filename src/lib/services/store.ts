@@ -263,6 +263,18 @@ class ClientLoopStore {
     return this.businesses.find(b => b.id === id)
   }
 
+  getBusinessBySlug(slug: string): Business | undefined {
+    const s = slug.toLowerCase().trim()
+    return this.businesses.find(b => b.slug?.toLowerCase() === s || b.id === slug)
+  }
+
+  getBusinessByIdOrSlug(identifier: string): Business | undefined {
+    if (!identifier) return undefined
+    const clean = identifier.trim()
+    const cleanLower = clean.toLowerCase()
+    return this.businesses.find(b => b.id === clean || b.slug?.toLowerCase() === cleanLower)
+  }
+
   createBusiness(biz: Business): Business {
     const existing = this.businesses.find(b => b.id === biz.id)
     if (existing) {
@@ -676,14 +688,19 @@ class ClientLoopStore {
     return event
   }
 
-  recordReviewClick(businessId: string, customerId?: string, visitId?: string): ReviewActivity {
+  recordReviewClick(
+    businessId: string, 
+    customerId?: string, 
+    visitId?: string, 
+    source: string = 'thank_you_page'
+  ): ReviewActivity {
     const event: ReviewActivity = {
       id: generateUuid(),
       business_id: businessId,
       customer_id: customerId || null,
       visit_id: visitId || null,
       event_type: 'link_clicked',
-      source: 'thank_you_page',
+      source,
       verification_level: 'unverified_click',
       review_count_snapshot: null,
       created_at: new Date().toISOString()

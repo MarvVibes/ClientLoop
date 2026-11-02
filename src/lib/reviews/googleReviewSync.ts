@@ -43,7 +43,8 @@ export class GoogleReviewSyncService {
         'search.google.com',
         'maps.google.com',
         'google.com',
-        'www.google.com'
+        'www.google.com',
+        'goo.gl'
       ]
 
       const isGoogleHost = allowedHosts.some(host => 
